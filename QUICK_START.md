@@ -107,6 +107,11 @@ Response:
 - `GET /api/rewards/items` - See redeemable items
 - `POST /api/rewards/items/{id}/redeem` - Redeem item
 
+### File Uploads (Supabase Storage)
+- `POST /api/uploads/image` - Upload image (max 5MB)
+- `POST /api/uploads/video` - Upload video (max 50MB)
+- `DELETE /api/uploads/file` - Delete a file
+
 ## 🧪 Try It Out
 
 ### 1. Create an Account
@@ -158,7 +163,8 @@ You just earned 25 points! 🎉
 
 ## 📖 Full Documentation
 
-- **Detailed Setup**: See `SUPABASE_SETUP.md`
+- **Database Setup**: See `SUPABASE_SETUP.md`
+- **Storage Setup**: See `SUPABASE_STORAGE_SETUP.md` for image/video uploads
 - **API Reference**: Visit http://localhost:8000/docs when server is running
 - **Main README**: See `README.md`
 
@@ -209,9 +215,10 @@ Your backend is now running and ready to power your FailState app!
 
 Next steps:
 1. ✅ Backend running
-2. 🔌 Connect your Next.js frontend
-3. 🧪 Test all features
-4. 🚀 Deploy to production
+2. 📁 Setup Supabase Storage buckets (see `SUPABASE_STORAGE_SETUP.md`)
+3. 🔌 Connect your Next.js frontend
+4. 🧪 Test all features
+5. 🚀 Deploy to production
 
 **Need help?** Check out the full documentation or test endpoints in the Swagger UI at http://localhost:8000/docs
 

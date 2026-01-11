@@ -38,14 +38,11 @@ SMTP_USER=your-email@gmail.com
 SMTP_PASSWORD=your-app-password
 
 # ================================================
-# STORAGE CONFIGURATION (Optional)
+# STORAGE CONFIGURATION
 # ================================================
-# For image/video uploads to AWS S3
-
-AWS_ACCESS_KEY_ID=your-aws-access-key
-AWS_SECRET_ACCESS_KEY=your-aws-secret-key
-AWS_S3_BUCKET=your-bucket-name
-AWS_REGION=us-east-1
+# Images and videos are stored in Supabase Storage
+# Buckets will be created automatically: issue-images, issue-videos
+# No additional configuration needed - uses SUPABASE_URL and SUPABASE_SERVICE_KEY above
 
 # ================================================
 # APPLICATION SETTINGS

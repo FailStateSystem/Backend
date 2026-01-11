@@ -19,12 +19,6 @@ class Settings(BaseSettings):
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
     
-    # Storage (Optional)
-    AWS_ACCESS_KEY_ID: Optional[str] = None
-    AWS_SECRET_ACCESS_KEY: Optional[str] = None
-    AWS_S3_BUCKET: Optional[str] = None
-    AWS_REGION: Optional[str] = "us-east-1"
-    
     # Application
     ENVIRONMENT: str = "development"
     DEBUG: bool = True

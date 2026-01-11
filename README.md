@@ -6,6 +6,7 @@ A FastAPI-based backend for the FailState civic issue reporting application.
 
 - **User Authentication**: JWT-based authentication with signup and login
 - **Issue Reporting**: Create, read, update issues with location tracking
+- **File Uploads**: Image and video uploads to Supabase Storage with automatic optimization
 - **Rewards System**: Gamification with points, milestones, and redeemable items
 - **Timeline Tracking**: Track issue status changes and updates
 - **Upvoting System**: Community engagement through upvotes
@@ -14,9 +15,10 @@ A FastAPI-based backend for the FailState civic issue reporting application.
 ## Tech Stack
 
 - **FastAPI**: Modern Python web framework
-- **Supabase**: PostgreSQL database with real-time capabilities
+- **Supabase**: PostgreSQL database + Storage for files
 - **JWT**: Secure authentication
 - **Pydantic**: Data validation
+- **Pillow**: Image processing and optimization
 - **Python 3.10+**
 
 ## Setup
@@ -49,7 +51,16 @@ Update the following in `.env`:
 
 Run the SQL queries provided in `database_schema.sql` on your Supabase SQL console to create all necessary tables and functions.
 
-### 4. Run the Server
+### 4. Set Up Storage (Optional but Recommended)
+
+Create storage buckets in Supabase for image and video uploads:
+1. Go to Supabase Dashboard → Storage
+2. Create bucket: `issue-images` (Public)
+3. Create bucket: `issue-videos` (Public)
+
+See `SUPABASE_STORAGE_SETUP.md` for detailed instructions.
+
+### 5. Run the Server
 
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -91,6 +102,11 @@ Once the server is running, visit:
 - `GET /api/rewards/claimed` - Get claimed items
 - `GET /api/rewards/history` - Get rewards history
 
+### File Uploads
+- `POST /api/uploads/image` - Upload an image (max 5MB)
+- `POST /api/uploads/video` - Upload a video (max 50MB)
+- `DELETE /api/uploads/file` - Delete a file from storage
+
 ## Project Structure
 
 ```
@@ -102,16 +118,22 @@ failstate-backend/
 │   ├── database.py       # Supabase client
 │   ├── models.py         # Pydantic models
 │   ├── auth.py           # Authentication utilities
+│   ├── storage.py        # File upload service (Supabase Storage)
 │   └── routers/
 │       ├── __init__.py
 │       ├── auth.py       # Auth endpoints
 │       ├── users.py      # User endpoints
 │       ├── issues.py     # Issue endpoints
-│       └── rewards.py    # Rewards endpoints
+│       ├── rewards.py    # Rewards endpoints
+│       └── uploads.py    # File upload endpoints
 ├── requirements.txt
+├── database_schema.sql
 ├── .env.example
 ├── .gitignore
-└── README.md
+├── README.md
+├── QUICK_START.md
+├── SUPABASE_SETUP.md
+└── SUPABASE_STORAGE_SETUP.md
 ```
 
 ## Development

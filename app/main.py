@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.routers import auth, users, issues, rewards
+from app.routers import auth, users, issues, rewards, uploads
 
 app = FastAPI(
     title="FailState Backend API",
@@ -23,6 +23,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(users.router, prefix="/api/users", tags=["Users"])
 app.include_router(issues.router, prefix="/api/issues", tags=["Issues"])
 app.include_router(rewards.router, prefix="/api/rewards", tags=["Rewards"])
+app.include_router(uploads.router, prefix="/api/uploads", tags=["File Uploads"])
 
 @app.get("/")
 async def root():

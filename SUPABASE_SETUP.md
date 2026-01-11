@@ -268,9 +268,10 @@ WITH CHECK (auth.uid() = reported_by);
 
 1. ✅ Database setup complete
 2. ✅ Backend configured
-3. 📱 Update your frontend to point to `http://localhost:8000/api`
-4. 🧪 Test the API endpoints using the Swagger docs at `http://localhost:8000/docs`
-5. 🚀 Deploy to production when ready
+3. 📁 **Setup Supabase Storage** - See `SUPABASE_STORAGE_SETUP.md` for image/video uploads
+4. 📱 Update your frontend to point to `http://localhost:8000/api`
+5. 🧪 Test the API endpoints using the Swagger docs at `http://localhost:8000/docs`
+6. 🚀 Deploy to production when ready
 
 ## Need Help?
 
