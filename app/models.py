@@ -71,11 +71,6 @@ class User(UserBase):
     class Config:
         from_attributes = True
 
-class UserProfile(User):
-    badges: List["Badge"] = []
-    total_points: int = 0
-    current_tier: str = "Observer I"
-
 # Badge Models
 class Badge(BaseModel):
     id: str
@@ -87,6 +82,11 @@ class Badge(BaseModel):
 
     class Config:
         from_attributes = True
+
+class UserProfile(User):
+    badges: List[Badge] = []
+    total_points: int = 0
+    current_tier: str = "Observer I"
 
 # Timeline Event Models
 class TimelineEvent(BaseModel):
