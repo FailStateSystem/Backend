@@ -4,7 +4,10 @@ from datetime import datetime
 from app.models import Issue, IssueCreate, IssueUpdate, TimelineEvent, IssueStatus, IssueCategory, TokenData, TimelineEventType
 from app.auth import get_current_user
 from app.database import get_supabase
+from app.storage import upload_base64_image, IMAGES_BUCKET
 import json
+import base64
+import uuid
 
 router = APIRouter()
 
@@ -14,6 +17,23 @@ async def create_issue(issue_data: IssueCreate, current_user: TokenData = Depend
     supabase = get_supabase()
     
     try:
+        # Handle image upload if base64 data is provided
+        image_url = issue_data.image_url
+        
+        if issue_data.image and issue_data.image.startswith('data:image'):
+            try:
+                # Upload base64 image to Supabase Storage
+                public_url, file_path = await upload_base64_image(
+                    supabase, 
+                    issue_data.image, 
+                    current_user.user_id
+                )
+                image_url = public_url
+            except Exception as upload_error:
+                print(f"Image upload failed: {str(upload_error)}")
+                # Continue without image if upload fails
+                image_url = None
+        
         # Create issue
         new_issue = {
             "title": issue_data.title,
@@ -23,7 +43,7 @@ async def create_issue(issue_data: IssueCreate, current_user: TokenData = Depend
             "location_name": issue_data.location.name,
             "location_lat": issue_data.location.coordinates.lat,
             "location_lng": issue_data.location.coordinates.lng,
-            "image_url": issue_data.image_url,
+            "image_url": image_url,
             "video_url": issue_data.video_url,
             "reported_by": current_user.user_id,
             "upvotes": 0

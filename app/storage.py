@@ -11,6 +11,8 @@ from datetime import datetime
 import os
 from PIL import Image
 import io
+import base64
+import re
 
 # Allowed file types
 ALLOWED_IMAGE_TYPES = {
@@ -166,6 +168,129 @@ async def upload_image(supabase: Client, file: UploadFile, user_id: str) -> Tupl
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to upload image: {str(e)}"
+        )
+
+
+async def upload_base64_image(supabase: Client, base64_data: str, user_id: str) -> Tuple[str, str]:
+    """
+    Upload a base64-encoded image to Supabase Storage
+    
+    Args:
+        supabase: Supabase client
+        base64_data: Base64-encoded image string (with or without data URI prefix)
+        user_id: ID of user uploading the file
+    
+    Returns:
+        Tuple of (public_url, file_path)
+    
+    Raises:
+        HTTPException: If validation or upload fails
+    """
+    try:
+        # Extract base64 data and content type
+        # Format: "data:image/png;base64,iVBORw0KGgoAAAANS..."
+        match = re.match(r'data:image/(\w+);base64,(.+)', base64_data)
+        
+        if not match:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid base64 image format. Expected format: data:image/[type];base64,[data]"
+            )
+        
+        image_format = match.group(1).lower()
+        base64_string = match.group(2)
+        
+        # Validate image format
+        valid_formats = ['jpeg', 'jpg', 'png', 'webp', 'gif']
+        if image_format not in valid_formats:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid image format: {image_format}. Allowed formats: {', '.join(valid_formats)}"
+            )
+        
+        # Decode base64 to bytes
+        try:
+            image_bytes = base64.b64decode(base64_string)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to decode base64 image data"
+            )
+        
+        # Validate file size
+        if len(image_bytes) > MAX_IMAGE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Image too large. Maximum size: {MAX_IMAGE_SIZE / (1024*1024)}MB"
+            )
+        
+        # Open and optimize image
+        try:
+            image = Image.open(io.BytesIO(image_bytes))
+            
+            # Convert RGBA to RGB if needed
+            if image.mode in ('RGBA', 'LA', 'P'):
+                background = Image.new('RGB', image.size, (255, 255, 255))
+                if image.mode == 'P':
+                    image = image.convert('RGBA')
+                background.paste(image, mask=image.split()[-1] if image.mode == 'RGBA' else None)
+                image = background
+            
+            # Resize if too large
+            max_dimension = 1920
+            if max(image.size) > max_dimension:
+                ratio = max_dimension / max(image.size)
+                new_size = tuple(int(dim * ratio) for dim in image.size)
+                image = image.resize(new_size, Image.Resampling.LANCZOS)
+            
+            # Save optimized image
+            output = io.BytesIO()
+            save_format = 'JPEG' if image_format in ['jpeg', 'jpg'] else image_format.upper()
+            image.save(output, format=save_format, quality=85, optimize=True)
+            output.seek(0)
+            optimized_data = output.read()
+        except Exception as e:
+            # If optimization fails, use original
+            optimized_data = image_bytes
+        
+        # Generate unique filename
+        timestamp = int(datetime.utcnow().timestamp())
+        unique_id = str(uuid.uuid4())[:8]
+        file_ext = f".{image_format.replace('jpeg', 'jpg')}"
+        unique_filename = f"{timestamp}_{unique_id}_issue{file_ext}"
+        
+        # Determine content type
+        content_type_map = {
+            'jpeg': 'image/jpeg',
+            'jpg': 'image/jpeg',
+            'png': 'image/png',
+            'webp': 'image/webp',
+            'gif': 'image/gif'
+        }
+        content_type = content_type_map.get(image_format, 'image/jpeg')
+        
+        # Upload to Supabase Storage
+        result = supabase.storage.from_(IMAGES_BUCKET).upload(
+            path=unique_filename,
+            file=optimized_data,
+            file_options={
+                "content-type": content_type,
+                "cache-control": "3600",
+                "upsert": "false"
+            }
+        )
+        
+        # Get public URL
+        public_url = supabase.storage.from_(IMAGES_BUCKET).get_public_url(unique_filename)
+        
+        return public_url, unique_filename
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to upload base64 image: {str(e)}"
         )
 
 

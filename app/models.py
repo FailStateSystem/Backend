@@ -107,7 +107,8 @@ class IssueBase(BaseModel):
     location: Location
 
 class IssueCreate(IssueBase):
-    image_url: Optional[str] = None
+    image: Optional[str] = None  # Base64 encoded image data
+    image_url: Optional[str] = None  # Direct URL (for backward compatibility)
     video_url: Optional[str] = None
 
 class IssueUpdate(BaseModel):
