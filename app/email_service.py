@@ -36,19 +36,27 @@ def send_email_resend(to_email: str, subject: str, html_content: str, text_conte
         True if sent successfully, False otherwise
     """
     if not RESEND_AVAILABLE:
+        logger.warning("Resend package not available - install with: pip install resend")
         return False
     
     # Check if Resend API key is configured
     resend_api_key = getattr(settings, 'RESEND_API_KEY', None)
     if not resend_api_key:
-        logger.debug("Resend API key not configured")
+        logger.warning("RESEND_API_KEY environment variable not set")
         return False
+    
+    logger.info(f"Attempting to send email via Resend to {to_email}")
     
     try:
         resend.api_key = resend_api_key
         
         # Get from email (use configured or default)
-        from_email = getattr(settings, 'SMTP_USER', 'noreply@failstate.in')
+        from_email = getattr(settings, 'SMTP_USER', 'onboarding@resend.dev')
+        
+        # If no custom email configured, use Resend's test domain
+        if not from_email or from_email == 'noreply@failstate.in':
+            from_email = 'onboarding@resend.dev'
+            logger.info("Using Resend test domain (onboarding@resend.dev)")
         
         params = {
             "from": from_email,
@@ -60,12 +68,14 @@ def send_email_resend(to_email: str, subject: str, html_content: str, text_conte
         if text_content:
             params["text"] = text_content
         
+        logger.info(f"Sending email from {from_email} to {to_email}")
         email = resend.Emails.send(params)
-        logger.info(f"Email sent successfully via Resend to {to_email}")
+        logger.info(f"✅ Email sent successfully via Resend to {to_email}. ID: {email.get('id', 'unknown')}")
         return True
         
     except Exception as e:
-        logger.error(f"Failed to send email via Resend to {to_email}: {str(e)}")
+        logger.error(f"❌ Failed to send email via Resend to {to_email}: {str(e)}")
+        logger.error(f"Error type: {type(e).__name__}")
         return False
 
 
