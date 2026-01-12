@@ -1,6 +1,7 @@
 """
 Email Service for FailState
 Handles sending verification and welcome emails
+Supports both Resend API (recommended) and SMTP
 """
 
 import smtplib
@@ -12,10 +13,65 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Try to import resend (optional)
+try:
+    import resend
+    RESEND_AVAILABLE = True
+except ImportError:
+    RESEND_AVAILABLE = False
+    logger.warning("Resend not installed. Will use SMTP only.")
 
-def send_email(to_email: str, subject: str, html_content: str, text_content: Optional[str] = None) -> bool:
+
+def send_email_resend(to_email: str, subject: str, html_content: str, text_content: Optional[str] = None) -> bool:
     """
-    Send an email using SMTP
+    Send email using Resend API (recommended for cloud platforms)
+    
+    Args:
+        to_email: Recipient email address
+        subject: Email subject
+        html_content: HTML email body
+        text_content: Plain text fallback (optional)
+    
+    Returns:
+        True if sent successfully, False otherwise
+    """
+    if not RESEND_AVAILABLE:
+        return False
+    
+    # Check if Resend API key is configured
+    resend_api_key = getattr(settings, 'RESEND_API_KEY', None)
+    if not resend_api_key:
+        logger.debug("Resend API key not configured")
+        return False
+    
+    try:
+        resend.api_key = resend_api_key
+        
+        # Get from email (use configured or default)
+        from_email = getattr(settings, 'SMTP_USER', 'noreply@failstate.in')
+        
+        params = {
+            "from": from_email,
+            "to": [to_email],
+            "subject": subject,
+            "html": html_content,
+        }
+        
+        if text_content:
+            params["text"] = text_content
+        
+        email = resend.Emails.send(params)
+        logger.info(f"Email sent successfully via Resend to {to_email}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to send email via Resend to {to_email}: {str(e)}")
+        return False
+
+
+def send_email_smtp(to_email: str, subject: str, html_content: str, text_content: Optional[str] = None) -> bool:
+    """
+    Send email using SMTP (fallback method)
     
     Args:
         to_email: Recipient email address
@@ -28,8 +84,7 @@ def send_email(to_email: str, subject: str, html_content: str, text_content: Opt
     """
     # Check if SMTP is configured
     if not settings.SMTP_HOST or not settings.SMTP_USER or not settings.SMTP_PASSWORD:
-        logger.warning("SMTP not configured. Email not sent.")
-        logger.info(f"Would send email to {to_email}: {subject}")
+        logger.debug("SMTP not configured")
         return False
     
     try:
@@ -64,12 +119,40 @@ def send_email(to_email: str, subject: str, html_content: str, text_content: Opt
                 server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
                 server.send_message(msg)
         
-        logger.info(f"Email sent successfully to {to_email}")
+        logger.info(f"Email sent successfully via SMTP to {to_email}")
         return True
         
     except Exception as e:
-        logger.error(f"Failed to send email to {to_email}: {str(e)}")
+        logger.error(f"Failed to send email via SMTP to {to_email}: {str(e)}")
         return False
+
+
+def send_email(to_email: str, subject: str, html_content: str, text_content: Optional[str] = None) -> bool:
+    """
+    Send an email using the best available method
+    Tries Resend API first, falls back to SMTP if needed
+    
+    Args:
+        to_email: Recipient email address
+        subject: Email subject
+        html_content: HTML email body
+        text_content: Plain text fallback (optional)
+    
+    Returns:
+        True if sent successfully, False otherwise
+    """
+    # Try Resend first (works on cloud platforms)
+    if send_email_resend(to_email, subject, html_content, text_content):
+        return True
+    
+    # Fall back to SMTP
+    if send_email_smtp(to_email, subject, html_content, text_content):
+        return True
+    
+    # Both methods failed
+    logger.warning(f"All email methods failed for {to_email}: {subject}")
+    logger.info("Configure RESEND_API_KEY or SMTP credentials to send emails")
+    return False
 
 
 def send_verification_email(to_email: str, username: str, verification_link: str) -> bool:

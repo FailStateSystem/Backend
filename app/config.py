@@ -13,8 +13,9 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
-    # Email (Optional)
-    SMTP_HOST: Optional[str] = None
+    # Email (Optional - Resend recommended for cloud platforms)
+    RESEND_API_KEY: Optional[str] = None  # Recommended: works on all platforms
+    SMTP_HOST: Optional[str] = None       # Fallback: may be blocked on some platforms
     SMTP_PORT: Optional[int] = None
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
