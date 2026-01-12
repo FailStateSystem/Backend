@@ -130,6 +130,8 @@ class Issue(IssueBase):
     resolved_at: Optional[datetime] = None
     upvotes: int = 0
     timeline: List[TimelineEvent] = []
+    verification_status: Optional[str] = "pending"  # AI verification status
+    processed_at: Optional[datetime] = None  # When AI verification completed
 
     class Config:
         from_attributes = True

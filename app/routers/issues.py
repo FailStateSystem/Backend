@@ -506,7 +506,9 @@ async def build_issue_response(issue_data: dict) -> Issue:
         reported_at=issue_data["reported_at"],
         resolved_at=issue_data.get("resolved_at"),
         upvotes=issue_data["upvotes"],
-        timeline=timeline
+        timeline=timeline,
+        verification_status=issue_data.get("verification_status", "pending"),
+        processed_at=issue_data.get("processed_at")
     )
 
 async def build_verified_issue_response(verified_data: dict) -> Issue:
@@ -545,7 +547,9 @@ async def build_verified_issue_response(verified_data: dict) -> Issue:
         reported_at=original_issue.get("reported_at"),
         resolved_at=original_issue.get("resolved_at"),
         upvotes=original_issue.get("upvotes", 0),
-        timeline=timeline
+        timeline=timeline,
+        verification_status="verified",  # Always verified for issues in verified table
+        processed_at=original_issue.get("processed_at")
     )
 
 async def add_timeline_event(issue_id: str, event_type: TimelineEventType, description: str):
