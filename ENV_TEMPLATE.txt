@@ -28,14 +28,21 @@ ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 
 # ================================================
-# EMAIL CONFIGURATION (Optional)
+# EMAIL CONFIGURATION (Required for email verification)
 # ================================================
-# For sending email notifications
+# For sending verification and welcome emails
 
-SMTP_HOST=smtp.gmail.com
+# Titan Email Configuration
+SMTP_HOST=smtp.titan.email
 SMTP_PORT=587
-SMTP_USER=your-email@gmail.com
-SMTP_PASSWORD=your-app-password
+SMTP_USER=your-email@yourdomain.com
+SMTP_PASSWORD=your-titan-email-password
+
+# Alternative: Gmail (use App Password, not regular password)
+# SMTP_HOST=smtp.gmail.com
+# SMTP_PORT=587
+# SMTP_USER=your-email@gmail.com
+# SMTP_PASSWORD=your-gmail-app-password
 
 # ================================================
 # STORAGE CONFIGURATION
@@ -51,6 +58,12 @@ SMTP_PASSWORD=your-app-password
 ENVIRONMENT=development
 DEBUG=True
 CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+
+# Frontend URL (for email verification redirects)
+FRONTEND_URL=http://localhost:3000
+
+# Backend URL (for verification links in emails)
+BACKEND_URL=http://localhost:8000
 
 # ================================================
 # SETUP INSTRUCTIONS

@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
     CORS_ORIGINS: str = "http://localhost:3000"
+    FRONTEND_URL: str = "http://localhost:3000"  # For email verification links
+    BACKEND_URL: str = "http://localhost:8000"   # For API verification endpoint
     
     class Config:
         env_file = ".env"
