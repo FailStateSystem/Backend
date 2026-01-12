@@ -132,10 +132,9 @@ class VerificationWorker:
             
             # Award points for verified issue
             try:
-                self.supabase.rpc("award_points", {
+                self.supabase.rpc("add_user_points", {
                     "user_id": user_id,
-                    "points": 25,
-                    "reason": "verified_issue_reported"
+                    "points": 25
                 }).execute()
                 logger.info(f"✅ Awarded points to user {user_id}")
             except Exception as e:
@@ -193,8 +192,15 @@ class VerificationWorker:
                 verification = await verify_issue_with_ai(image_url, description, lat, lng)
                 
                 if not verification:
-                    logger.warning(f"AI verification failed for {issue_id} - using fallback")
-                    verification = await verify_issue_without_ai(description)
+                    # AI failed - keep issue in pending state for manual processing
+                    logger.warning(f"⚠️ AI verification unavailable for {issue_id} - keeping in pending state")
+                    await self.log_audit(
+                        issue_id, 
+                        "pending",
+                        error_msg="AI service unavailable - quota exceeded or service down"
+                    )
+                    # Don't mark as failed - leave in pending for later retry
+                    return False
             else:
                 logger.info(f"AI verification disabled or no image - using fallback")
                 verification = await verify_issue_without_ai(description)

@@ -131,6 +131,33 @@ async def get_issues(
             detail=f"An error occurred: {str(e)}"
         )
 
+@router.get("/my-issues", response_model=List[Issue])
+async def get_my_issues(
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Get all issues created by the current user (including pending/rejected)"""
+    supabase = get_supabase()
+    
+    try:
+        # Query original issues table (shows all statuses)
+        result = supabase.table("issues").select("*").eq(
+            "reported_by", current_user.user_id
+        ).order("reported_at", desc=True).execute()
+        
+        issues = []
+        for issue_data in result.data:
+            issue = await build_issue_response(issue_data)
+            issues.append(issue)
+        
+        return issues
+        
+    except Exception as e:
+        logger.error(f"Error fetching user's issues: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred: {str(e)}"
+        )
+
 @router.get("/{issue_id}", response_model=Issue)
 async def get_issue_by_id(issue_id: str):
     """Get a specific verified issue by ID (public endpoint)"""
@@ -341,6 +368,107 @@ async def remove_upvote(issue_id: str, current_user: TokenData = Depends(get_cur
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred: {str(e)}"
+        )
+
+@router.get("/admin/stats")
+async def admin_get_verification_stats(
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Admin endpoint: Get verification statistics
+    Shows counts of pending, verified, rejected issues
+    """
+    supabase = get_supabase()
+    
+    try:
+        # TODO: Add admin role check here
+        
+        # Count by verification status
+        pending = supabase.table("issues").select("id", count="exact").eq(
+            "verification_status", "pending"
+        ).execute()
+        
+        verified = supabase.table("issues").select("id", count="exact").eq(
+            "verification_status", "verified"
+        ).execute()
+        
+        rejected = supabase.table("issues").select("id", count="exact").eq(
+            "verification_status", "rejected"
+        ).execute()
+        
+        failed = supabase.table("issues").select("id", count="exact").eq(
+            "verification_status", "failed"
+        ).execute()
+        
+        return {
+            "verification_stats": {
+                "pending": pending.count,
+                "verified": verified.count,
+                "rejected": rejected.count,
+                "failed": failed.count,
+                "total": pending.count + verified.count + rejected.count + failed.count
+            },
+            "message": "Use POST /api/issues/admin/process-pending to process pending issues"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching verification stats: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred: {str(e)}"
+        )
+
+@router.post("/admin/process-pending")
+async def admin_process_pending_issues(
+    batch_size: int = Query(default=50, le=200),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Admin endpoint: Manually trigger processing of pending issues
+    Useful when OpenAI quota is restored or after service outage
+    """
+    supabase = get_supabase()
+    
+    try:
+        # TODO: Add admin role check here
+        # For now, any authenticated user can trigger this
+        # In production, add: if current_user.role != "admin": raise HTTPException(403)
+        
+        logger.info(f"Admin {current_user.user_id} triggered batch processing of pending issues")
+        
+        # Get pending issues
+        result = supabase.table("issues").select("*").eq(
+            "verification_status", "pending"
+        ).order("reported_at", desc=False).limit(batch_size).execute()
+        
+        pending_count = len(result.data)
+        
+        if pending_count == 0:
+            return {
+                "message": "No pending issues to process",
+                "pending_count": 0,
+                "processed_count": 0
+            }
+        
+        # Trigger async verification for each pending issue
+        for issue in result.data:
+            asyncio.create_task(verify_issue_async(issue["id"]))
+        
+        logger.info(f"✅ Queued {pending_count} pending issues for verification")
+        
+        return {
+            "message": f"Successfully queued {pending_count} issues for verification",
+            "pending_count": pending_count,
+            "note": "Processing will happen in background. Check logs or verification status."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error processing pending issues: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred: {str(e)}"

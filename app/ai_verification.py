@@ -185,6 +185,12 @@ async def verify_issue_with_ai(
             logger.error(f"AI verification error (attempt {attempt}/{retries}): {str(e)}")
             logger.error(f"Error type: {type(e).__name__}")
             
+            # Don't retry on quota/rate limit errors - these need manual intervention
+            error_type = type(e).__name__
+            if error_type in ["RateLimitError", "InsufficientQuotaError"] or "quota" in str(e).lower():
+                logger.error(f"⚠️ Quota/Rate limit error detected. Issue will remain pending for manual processing.")
+                return None  # Return None immediately without retrying
+            
             if attempt < retries:
                 logger.info("Retrying after error...")
                 continue
