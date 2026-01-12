@@ -49,10 +49,20 @@ def send_email(to_email: str, subject: str, html_content: str, text_content: Opt
         msg.attach(part2)
         
         # Send email with timeout to prevent hanging
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
-            server.starttls()
-            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-            server.send_message(msg)
+        # Use SSL (port 465) or TLS (port 587) based on SMTP_PORT
+        smtp_port = int(settings.SMTP_PORT)
+        
+        if smtp_port == 465:
+            # Use SMTP_SSL for port 465 (GoDaddy/Secureserver)
+            with smtplib.SMTP_SSL(settings.SMTP_HOST, smtp_port, timeout=10) as server:
+                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                server.send_message(msg)
+        else:
+            # Use SMTP with STARTTLS for port 587 (standard)
+            with smtplib.SMTP(settings.SMTP_HOST, smtp_port, timeout=10) as server:
+                server.starttls()
+                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                server.send_message(msg)
         
         logger.info(f"Email sent successfully to {to_email}")
         return True
