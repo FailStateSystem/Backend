@@ -5,9 +5,14 @@ from app.models import Issue, IssueCreate, IssueUpdate, TimelineEvent, IssueStat
 from app.auth import get_current_user
 from app.database import get_supabase
 from app.storage import upload_base64_image, IMAGES_BUCKET
+from app.verification_worker import verify_issue_async
 import json
 import base64
 import uuid
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -63,7 +68,7 @@ async def create_issue(issue_data: IssueCreate, current_user: TokenData = Depend
         timeline_event = {
             "issue_id": issue["id"],
             "type": TimelineEventType.REPORTED.value,
-            "description": "Issue reported",
+            "description": "Issue reported - pending AI verification",
             "timestamp": datetime.utcnow().isoformat()
         }
         supabase.table("timeline_events").insert(timeline_event).execute()
@@ -71,10 +76,13 @@ async def create_issue(issue_data: IssueCreate, current_user: TokenData = Depend
         # Update user stats
         supabase.rpc("increment_user_issues_posted", {"user_id": current_user.user_id}).execute()
         
-        # Award points for reporting
-        await award_points(current_user.user_id, 25, "Verified report logged")
+        # Trigger async AI verification (fire and forget)
+        # Note: Rewards will be awarded ONLY after successful verification
+        asyncio.create_task(verify_issue_async(issue["id"]))
+        logger.info(f"Issue {issue['id']} created - queued for AI verification")
         
-        return await get_issue_by_id(issue["id"])
+        # Return the created issue (from original issues table, not verified yet)
+        return await build_issue_response(issue)
         
     except HTTPException:
         raise
@@ -91,29 +99,33 @@ async def get_issues(
     limit: int = Query(default=50, le=100),
     offset: int = 0
 ):
-    """Get all issues with optional filters"""
+    """Get all verified issues with optional filters (public feed)"""
     supabase = get_supabase()
     
     try:
-        query = supabase.table("issues").select("*")
+        # Query issues_verified and join with original issues for complete data
+        query = supabase.table("issues_verified").select(
+            "*, issues!inner(*)"
+        )
         
         if status:
-            query = query.eq("status", status.value)
+            query = query.eq("issues.status", status.value)
         
         if category:
-            query = query.eq("category", category.value)
+            query = query.eq("issues.category", category.value)
         
-        query = query.order("reported_at", desc=True).range(offset, offset + limit - 1)
+        query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
         result = query.execute()
         
         issues = []
-        for issue_data in result.data:
-            issue = await build_issue_response(issue_data)
+        for verified_data in result.data:
+            issue = await build_verified_issue_response(verified_data)
             issues.append(issue)
         
         return issues
         
     except Exception as e:
+        logger.error(f"Error fetching verified issues: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred: {str(e)}"
@@ -121,20 +133,89 @@ async def get_issues(
 
 @router.get("/{issue_id}", response_model=Issue)
 async def get_issue_by_id(issue_id: str):
-    """Get a specific issue by ID"""
+    """Get a specific verified issue by ID (public endpoint)"""
     supabase = get_supabase()
     
     try:
-        result = supabase.table("issues").select("*").eq("id", issue_id).execute()
+        # Try to find in verified issues first (by original_issue_id or id)
+        result = supabase.table("issues_verified").select(
+            "*, issues!inner(*)"
+        ).or_(f"id.eq.{issue_id},original_issue_id.eq.{issue_id}").execute()
         
-        if not result.data:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Issue not found")
+        if result.data:
+            return await build_verified_issue_response(result.data[0])
         
-        return await build_issue_response(result.data[0])
+        # If not found, check if it exists but is not verified yet
+        original = supabase.table("issues").select("verification_status").eq("id", issue_id).execute()
+        
+        if original.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail=f"Issue is pending verification (status: {original.data[0].get('verification_status', 'unknown')})"
+            )
+        
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Issue not found")
         
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error fetching issue {issue_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred: {str(e)}"
+        )
+
+@router.get("/{issue_id}/verification-status")
+async def get_verification_status(
+    issue_id: str,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Check AI verification status of an issue (requires authentication)"""
+    supabase = get_supabase()
+    
+    try:
+        # Check original issue
+        result = supabase.table("issues").select(
+            "id, verification_status, processed_at, reported_by"
+        ).eq("id", issue_id).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Issue not found")
+        
+        issue_data = result.data[0]
+        
+        # Only allow the issue reporter or admin to check status
+        if issue_data["reported_by"] != current_user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to view this issue's verification status"
+            )
+        
+        # Check if verified
+        verified = supabase.table("issues_verified").select("id, created_at").eq(
+            "original_issue_id", issue_id
+        ).execute()
+        
+        # Check if rejected
+        rejected = supabase.table("issues_rejected").select(
+            "rejection_reason, ai_reasoning, created_at"
+        ).eq("original_issue_id", issue_id).execute()
+        
+        return {
+            "issue_id": issue_id,
+            "verification_status": issue_data["verification_status"],
+            "processed_at": issue_data.get("processed_at"),
+            "is_verified": bool(verified.data),
+            "is_rejected": bool(rejected.data),
+            "verified_at": verified.data[0]["created_at"] if verified.data else None,
+            "rejection_reason": rejected.data[0]["rejection_reason"] if rejected.data else None,
+            "rejection_details": rejected.data[0]["ai_reasoning"] if rejected.data else None
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error checking verification status for {issue_id}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred: {str(e)}"
@@ -267,7 +348,7 @@ async def remove_upvote(issue_id: str, current_user: TokenData = Depends(get_cur
 
 # Helper functions
 async def build_issue_response(issue_data: dict) -> Issue:
-    """Build issue response with related data"""
+    """Build issue response with related data (for original issues table)"""
     supabase = get_supabase()
     
     # Get timeline events
@@ -297,6 +378,45 @@ async def build_issue_response(issue_data: dict) -> Issue:
         reported_at=issue_data["reported_at"],
         resolved_at=issue_data.get("resolved_at"),
         upvotes=issue_data["upvotes"],
+        timeline=timeline
+    )
+
+async def build_verified_issue_response(verified_data: dict) -> Issue:
+    """Build issue response from verified issue (with AI-enriched content)"""
+    supabase = get_supabase()
+    
+    # Extract the original issue data from the join
+    original_issue = verified_data.get("issues", {})
+    
+    # Get timeline events from original issue
+    original_issue_id = verified_data.get("original_issue_id")
+    timeline_result = supabase.table("timeline_events")\
+        .select("*").eq("issue_id", original_issue_id).order("timestamp").execute()
+    
+    timeline = [TimelineEvent(**event) for event in timeline_result.data]
+    
+    from app.models import Coordinates, Location
+    
+    # Use AI-generated title and description, but keep original issue metadata
+    return Issue(
+        id=original_issue.get("id"),  # Use original issue ID for consistency
+        title=verified_data.get("generated_title"),  # AI-enriched
+        description=verified_data.get("generated_description"),  # AI-enriched
+        category=IssueCategory(original_issue.get("category")),
+        status=IssueStatus(original_issue.get("status")),
+        location=Location(
+            name=verified_data.get("location_name") or original_issue.get("location_name"),
+            coordinates=Coordinates(
+                lat=verified_data.get("location_lat") or original_issue.get("location_lat"),
+                lng=verified_data.get("location_lng") or original_issue.get("location_lng")
+            )
+        ),
+        image_url=verified_data.get("image_url") or original_issue.get("image_url"),
+        video_url=verified_data.get("video_url") or original_issue.get("video_url"),
+        reported_by=verified_data.get("reported_by") or original_issue.get("reported_by"),
+        reported_at=original_issue.get("reported_at"),
+        resolved_at=original_issue.get("resolved_at"),
+        upvotes=original_issue.get("upvotes", 0),
         timeline=timeline
     )
 

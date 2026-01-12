@@ -1,0 +1,328 @@
+"""
+Background Verification Worker
+Processes issues through AI verification pipeline
+"""
+
+import logging
+import asyncio
+from datetime import datetime
+from typing import Optional
+from app.database import get_supabase
+from app.ai_verification import verify_issue_with_ai, verify_issue_without_ai, AIVerificationResponse
+from app.config import settings
+import traceback
+
+logger = logging.getLogger(__name__)
+
+
+class VerificationWorker:
+    """
+    Background worker that processes pending issues through AI verification
+    """
+    
+    def __init__(self):
+        self.supabase = get_supabase()
+        self.processing_lock = set()  # In-memory lock for idempotency
+    
+    async def log_audit(self, issue_id: str, status: str, attempt: int = 1, 
+                       error_msg: Optional[str] = None, ai_response: Optional[dict] = None,
+                       processing_time_ms: Optional[int] = None):
+        """Log verification attempt to audit table"""
+        try:
+            audit_entry = {
+                "issue_id": issue_id,
+                "status": status,
+                "attempt_number": attempt,
+                "error_message": error_msg,
+                "ai_raw_response": ai_response,
+                "ai_model_used": settings.OPENAI_MODEL if ai_response else None,
+                "processing_time_ms": processing_time_ms
+            }
+            self.supabase.table("verification_audit_log").insert(audit_entry).execute()
+        except Exception as e:
+            logger.error(f"Failed to log audit: {e}")
+    
+    async def mark_issue_processed(self, issue_id: str, status: str):
+        """Mark issue as processed in issues table"""
+        try:
+            self.supabase.table("issues").update({
+                "verification_status": status,
+                "processed_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", issue_id).execute()
+        except Exception as e:
+            logger.error(f"Failed to mark issue {issue_id} as processed: {e}")
+    
+    async def create_verified_issue(self, original_issue: dict, verification: AIVerificationResponse):
+        """Create entry in issues_verified table"""
+        try:
+            verified_data = {
+                "original_issue_id": original_issue["id"],
+                "is_genuine": verification.is_genuine,
+                "ai_confidence_score": verification.confidence_score,
+                "ai_reasoning": verification.reasoning,
+                "severity": verification.severity,
+                "generated_title": verification.generated_title,
+                "generated_description": verification.generated_description,
+                "public_impact": verification.public_impact,
+                "tags": verification.tags,
+                "content_warnings": verification.content_warnings,
+                # Denormalized fields from original
+                "category": original_issue["category"],
+                "location_name": original_issue["location_name"],
+                "location_lat": original_issue["location_lat"],
+                "location_lng": original_issue["location_lng"],
+                "image_url": original_issue.get("image_url"),
+                "video_url": original_issue.get("video_url"),
+                "reported_by": original_issue["reported_by"],
+                "status": original_issue.get("status", "unresolved"),
+                "upvotes": original_issue.get("upvotes", 0),
+                "reported_at": original_issue["reported_at"],
+                "verified_at": datetime.utcnow().isoformat()
+            }
+            
+            result = self.supabase.table("issues_verified").insert(verified_data).execute()
+            
+            if result.data:
+                logger.info(f"✅ Created verified issue for {original_issue['id']}")
+                return result.data[0]
+            else:
+                logger.error(f"Failed to create verified issue - no data returned")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to create verified issue: {e}")
+            logger.error(traceback.format_exc())
+            return None
+    
+    async def create_rejected_issue(self, original_issue: dict, verification: AIVerificationResponse):
+        """Create entry in issues_rejected table"""
+        try:
+            rejected_data = {
+                "original_issue_id": original_issue["id"],
+                "rejection_reason": "ai_verification_failed",
+                "ai_reasoning": verification.reasoning,
+                "confidence_score": verification.confidence_score,
+                "rejected_by": "ai_verification"
+            }
+            
+            result = self.supabase.table("issues_rejected").insert(rejected_data).execute()
+            
+            if result.data:
+                logger.info(f"✅ Created rejected issue for {original_issue['id']}")
+                return result.data[0]
+            else:
+                logger.error(f"Failed to create rejected issue - no data returned")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to create rejected issue: {e}")
+            logger.error(traceback.format_exc())
+            return None
+    
+    async def trigger_post_verification_hooks(self, verified_issue: dict, original_issue: dict):
+        """
+        Trigger post-verification hooks:
+        - Reward points
+        - Email notifications
+        - Timeline events
+        """
+        try:
+            user_id = original_issue["reported_by"]
+            
+            # Award points for verified issue
+            try:
+                self.supabase.rpc("award_points", {
+                    "user_id": user_id,
+                    "points": 25,
+                    "reason": "verified_issue_reported"
+                }).execute()
+                logger.info(f"✅ Awarded points to user {user_id}")
+            except Exception as e:
+                logger.error(f"Failed to award points: {e}")
+            
+            # Create timeline event
+            try:
+                timeline_event = {
+                    "issue_id": verified_issue["id"],
+                    "type": "verified",
+                    "description": f"Issue verified and published (Confidence: {verified_issue['ai_confidence_score']})",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                # Note: This would need to reference verified issue's ID in timeline
+                # For now, we'll skip this or create a separate timeline for verified issues
+                logger.info("Timeline event creation skipped - needs verified issue timeline table")
+            except Exception as e:
+                logger.error(f"Failed to create timeline event: {e}")
+            
+            # TODO: Trigger email notifications to authorities
+            # This should be implemented based on location/category
+            
+        except Exception as e:
+            logger.error(f"Failed to trigger post-verification hooks: {e}")
+    
+    async def process_issue(self, issue: dict) -> bool:
+        """
+        Process a single issue through verification pipeline
+        
+        Returns:
+            True if processed successfully, False otherwise
+        """
+        issue_id = issue["id"]
+        
+        # Idempotency check - skip if already processing
+        if issue_id in self.processing_lock:
+            logger.warning(f"Issue {issue_id} already being processed - skipping")
+            return False
+        
+        try:
+            self.processing_lock.add(issue_id)
+            start_time = datetime.utcnow()
+            
+            logger.info(f"🔄 Processing issue {issue_id}")
+            await self.log_audit(issue_id, "processing")
+            
+            # Get image and description
+            image_url = issue.get("image_url")
+            description = issue.get("description", "")
+            lat = issue.get("location_lat", 0)
+            lng = issue.get("location_lng", 0)
+            
+            # Verify with AI
+            if settings.AI_VERIFICATION_ENABLED and image_url:
+                verification = await verify_issue_with_ai(image_url, description, lat, lng)
+                
+                if not verification:
+                    logger.warning(f"AI verification failed for {issue_id} - using fallback")
+                    verification = await verify_issue_without_ai(description)
+            else:
+                logger.info(f"AI verification disabled or no image - using fallback")
+                verification = await verify_issue_without_ai(description)
+            
+            processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            
+            # Log successful verification
+            await self.log_audit(
+                issue_id, 
+                "verified" if verification.is_genuine else "rejected",
+                ai_response=verification.dict(),
+                processing_time_ms=processing_time
+            )
+            
+            # Route based on verification result
+            if verification.is_genuine:
+                logger.info(f"✅ Issue {issue_id} verified as GENUINE (confidence: {verification.confidence_score})")
+                
+                verified_issue = await self.create_verified_issue(issue, verification)
+                
+                if verified_issue:
+                    await self.mark_issue_processed(issue_id, "verified")
+                    await self.trigger_post_verification_hooks(verified_issue, issue)
+                    return True
+                else:
+                    await self.mark_issue_processed(issue_id, "failed")
+                    return False
+            else:
+                logger.info(f"❌ Issue {issue_id} verified as FAKE (confidence: {verification.confidence_score})")
+                
+                rejected_issue = await self.create_rejected_issue(issue, verification)
+                
+                if rejected_issue:
+                    await self.mark_issue_processed(issue_id, "rejected")
+                    return True
+                else:
+                    await self.mark_issue_processed(issue_id, "failed")
+                    return False
+        
+        except Exception as e:
+            logger.error(f"❌ Failed to process issue {issue_id}: {e}")
+            logger.error(traceback.format_exc())
+            await self.log_audit(issue_id, "failed", error_msg=str(e))
+            await self.mark_issue_processed(issue_id, "failed")
+            return False
+        
+        finally:
+            self.processing_lock.discard(issue_id)
+    
+    async def process_pending_issues(self, batch_size: int = 10) -> int:
+        """
+        Process a batch of pending issues
+        
+        Returns:
+            Number of issues processed
+        """
+        try:
+            # Get pending issues
+            result = self.supabase.table("issues").select("*").eq(
+                "verification_status", "pending"
+            ).limit(batch_size).execute()
+            
+            pending_issues = result.data if result.data else []
+            
+            if not pending_issues:
+                logger.debug("No pending issues to process")
+                return 0
+            
+            logger.info(f"📦 Found {len(pending_issues)} pending issues to process")
+            
+            # Process each issue
+            processed_count = 0
+            for issue in pending_issues:
+                success = await self.process_issue(issue)
+                if success:
+                    processed_count += 1
+            
+            logger.info(f"✅ Processed {processed_count}/{len(pending_issues)} issues")
+            return processed_count
+        
+        except Exception as e:
+            logger.error(f"Failed to process pending issues: {e}")
+            logger.error(traceback.format_exc())
+            return 0
+
+
+# Global worker instance
+worker = VerificationWorker()
+
+
+async def verify_issue_async(issue_id: str) -> bool:
+    """
+    Verify a single issue asynchronously
+    Can be called from API endpoint
+    """
+    try:
+        result = worker.supabase.table("issues").select("*").eq("id", issue_id).execute()
+        
+        if not result.data:
+            logger.error(f"Issue {issue_id} not found")
+            return False
+        
+        issue = result.data[0]
+        return await worker.process_issue(issue)
+    
+    except Exception as e:
+        logger.error(f"Failed to verify issue {issue_id}: {e}")
+        return False
+
+
+async def process_verification_queue():
+    """
+    Main worker loop - processes verification queue continuously
+    This can be run as a background task
+    """
+    logger.info("🚀 Verification worker started")
+    
+    while True:
+        try:
+            processed = await worker.process_pending_issues(batch_size=5)
+            
+            # Sleep longer if no issues to process
+            if processed == 0:
+                await asyncio.sleep(30)  # Check every 30 seconds when idle
+            else:
+                await asyncio.sleep(5)   # Check every 5 seconds when active
+        
+        except Exception as e:
+            logger.error(f"Error in verification worker loop: {e}")
+            await asyncio.sleep(60)  # Wait a bit longer on error
+

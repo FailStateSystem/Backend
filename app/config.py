@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
     
+    # AI Verification
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_MODEL: str = "gpt-4o"  # gpt-4o supports vision + JSON
+    AI_VERIFICATION_ENABLED: bool = True
+    AI_MAX_RETRIES: int = 3
+    AI_TIMEOUT_SECONDS: int = 30
+    
     # Application
     ENVIRONMENT: str = "development"
     DEBUG: bool = True

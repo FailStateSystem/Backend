@@ -1,12 +1,36 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+import asyncio
+import logging
 from app.config import settings
 from app.routers import auth, users, issues, rewards, uploads
+from app.verification_worker import process_verification_queue
+
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events"""
+    # Startup: Start background verification worker
+    worker_task = asyncio.create_task(process_verification_queue())
+    logger.info("🚀 Background AI verification worker started")
+    
+    yield
+    
+    # Shutdown: Cancel background worker
+    worker_task.cancel()
+    try:
+        await worker_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("🛑 Background AI verification worker stopped")
 
 app = FastAPI(
     title="FailState Backend API",
-    description="Backend API for civic issue reporting and rewards system",
-    version="1.0.0"
+    description="Backend API for civic issue reporting with AI verification",
+    version="2.0.0",
+    lifespan=lifespan
 )
 
 # Configure CORS
