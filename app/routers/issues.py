@@ -391,6 +391,11 @@ async def admin_get_verification_stats(
             "verification_status", "pending"
         ).execute()
         
+        # Count pending issues that exceeded max retries (need manual intervention)
+        pending_needs_manual = supabase.table("issues").select("id", count="exact").eq(
+            "verification_status", "pending"
+        ).gte("retry_count", 3).execute()
+        
         verified = supabase.table("issues").select("id", count="exact").eq(
             "verification_status", "verified"
         ).execute()
@@ -406,12 +411,14 @@ async def admin_get_verification_stats(
         return {
             "verification_stats": {
                 "pending": pending.count,
+                "pending_needs_manual_intervention": pending_needs_manual.count,
                 "verified": verified.count,
                 "rejected": rejected.count,
                 "failed": failed.count,
                 "total": pending.count + verified.count + rejected.count + failed.count
             },
-            "message": "Use POST /api/issues/admin/process-pending to process pending issues"
+            "message": "Use POST /api/issues/admin/process-pending to process pending issues",
+            "note": f"{pending_needs_manual.count} issues have exceeded max retries and need manual processing"
         }
         
     except Exception as e:
@@ -439,7 +446,7 @@ async def admin_process_pending_issues(
         
         logger.info(f"Admin {current_user.user_id} triggered batch processing of pending issues")
         
-        # Get pending issues
+        # Get pending issues (including those that exceeded retry limits)
         result = supabase.table("issues").select("*").eq(
             "verification_status", "pending"
         ).order("reported_at", desc=False).limit(batch_size).execute()
@@ -452,6 +459,15 @@ async def admin_process_pending_issues(
                 "pending_count": 0,
                 "processed_count": 0
             }
+        
+        # Reset retry count for all pending issues (allows reprocessing)
+        issue_ids = [issue["id"] for issue in result.data]
+        for issue_id in issue_ids:
+            supabase.table("issues").update({
+                "retry_count": 0
+            }).eq("id", issue_id).execute()
+        
+        logger.info(f"✅ Reset retry count for {pending_count} issues")
         
         # Trigger async verification for each pending issue
         for issue in result.data:

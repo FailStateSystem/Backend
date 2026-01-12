@@ -53,6 +53,30 @@ class VerificationWorker:
         except Exception as e:
             logger.error(f"Failed to mark issue {issue_id} as processed: {e}")
     
+    async def increment_retry_count(self, issue_id: str) -> int:
+        """Increment retry count for an issue and return new count"""
+        try:
+            # Get current retry count
+            result = self.supabase.table("issues").select("retry_count").eq("id", issue_id).execute()
+            
+            if not result.data:
+                return 0
+            
+            current_count = result.data[0].get("retry_count", 0) or 0
+            new_count = current_count + 1
+            
+            # Update retry count
+            self.supabase.table("issues").update({
+                "retry_count": new_count
+            }).eq("id", issue_id).execute()
+            
+            logger.info(f"Issue {issue_id} retry count: {new_count}/3")
+            return new_count
+            
+        except Exception as e:
+            logger.error(f"Failed to increment retry count: {e}")
+            return 0
+    
     async def create_verified_issue(self, original_issue: dict, verification: AIVerificationResponse):
         """Create entry in issues_verified table"""
         try:
@@ -181,6 +205,20 @@ class VerificationWorker:
             logger.info(f"🔄 Processing issue {issue_id}")
             await self.log_audit(issue_id, "processing")
             
+            # Increment retry count
+            new_retry_count = await self.increment_retry_count(issue_id)
+            
+            # Check if max retries exceeded
+            if new_retry_count >= 3:
+                logger.error(f"⛔ Issue {issue_id} has exceeded max retries (3). Requires manual intervention.")
+                await self.log_audit(
+                    issue_id,
+                    "pending_manual",
+                    error_msg=f"Max retries ({new_retry_count}) exceeded - requires manual processing"
+                )
+                # Keep as pending but won't be picked up automatically anymore
+                return False
+            
             # Get image and description
             image_url = issue.get("image_url")
             description = issue.get("description", "")
@@ -192,14 +230,14 @@ class VerificationWorker:
                 verification = await verify_issue_with_ai(image_url, description, lat, lng)
                 
                 if not verification:
-                    # AI failed - keep issue in pending state for manual processing
-                    logger.warning(f"⚠️ AI verification unavailable for {issue_id} - keeping in pending state")
+                    # AI failed - keep issue in pending state for later retry
+                    logger.warning(f"⚠️ AI verification unavailable for {issue_id} (attempt {new_retry_count}/3)")
                     await self.log_audit(
                         issue_id, 
                         "pending",
-                        error_msg="AI service unavailable - quota exceeded or service down"
+                        error_msg=f"AI service unavailable (attempt {new_retry_count}/3) - quota exceeded or service down"
                     )
-                    # Don't mark as failed - leave in pending for later retry
+                    # Don't mark as failed - leave in pending for later retry (if < 3 attempts)
                     return False
             else:
                 logger.info(f"AI verification disabled or no image - using fallback")
@@ -252,21 +290,22 @@ class VerificationWorker:
     
     async def process_pending_issues(self, batch_size: int = 10) -> int:
         """
-        Process a batch of pending issues
+        Process a batch of pending issues (only those with retry_count < 3)
         
         Returns:
             Number of issues processed
         """
         try:
-            # Get pending issues
+            # Get pending issues that haven't exceeded max retries
+            # Only process issues with retry_count < 3
             result = self.supabase.table("issues").select("*").eq(
                 "verification_status", "pending"
-            ).limit(batch_size).execute()
+            ).lt("retry_count", 3).limit(batch_size).execute()
             
             pending_issues = result.data if result.data else []
             
             if not pending_issues:
-                logger.debug("No pending issues to process")
+                logger.debug("No pending issues to process (all have exceeded max retries)")
                 return 0
             
             logger.info(f"📦 Found {len(pending_issues)} pending issues to process")
