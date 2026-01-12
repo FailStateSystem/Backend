@@ -173,11 +173,16 @@ async def verify_email(token: str):
         
         # Check if already verified
         if user.get("email_verified", False):
-            # Redirect to frontend with success message
-            return {
-                "message": "Email already verified. You can now log in.",
-                "redirect_url": f"{settings.FRONTEND_URL}/login?verified=true"
-            }
+            # Create access token for auto-login
+            access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+            access_token = create_access_token(
+                data={"sub": user["id"], "email": user["email"]},
+                expires_delta=access_token_expires
+            )
+            # Redirect to frontend with token
+            from fastapi.responses import RedirectResponse
+            redirect_url = f"{settings.FRONTEND_URL}/login?verified=true&token={access_token}"
+            return RedirectResponse(url=redirect_url, status_code=302)
         
         # Update user as verified
         supabase.table("users").update({
@@ -186,6 +191,13 @@ async def verify_email(token: str):
             "verification_token_expires": None
         }).eq("id", user["id"]).execute()
         
+        # Create access token for auto-login
+        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user["id"], "email": user["email"]},
+            expires_delta=access_token_expires
+        )
+        
         # Send welcome email (don't block if it fails)
         login_link = f"{settings.FRONTEND_URL}/login"
         try:
@@ -193,11 +205,10 @@ async def verify_email(token: str):
         except Exception as e:
             logger.error(f"Failed to send welcome email: {str(e)}")
         
-        # Return success with redirect
-        return {
-            "message": "Email verified successfully! Welcome to FailState. Check your email for next steps.",
-            "redirect_url": f"{settings.FRONTEND_URL}/login?verified=true"
-        }
+        # Redirect to frontend with token for auto-login
+        from fastapi.responses import RedirectResponse
+        redirect_url = f"{settings.FRONTEND_URL}/login?verified=true&token={access_token}"
+        return RedirectResponse(url=redirect_url, status_code=302)
         
     except HTTPException:
         raise
