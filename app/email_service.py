@@ -48,8 +48,8 @@ def send_email(to_email: str, subject: str, html_content: str, text_content: Opt
         part2 = MIMEText(html_content, 'html')
         msg.attach(part2)
         
-        # Send email
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+        # Send email with timeout to prevent hanging
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
             server.starttls()
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             server.send_message(msg)

@@ -6,6 +6,9 @@ from app.database import get_supabase
 from app.config import settings
 from app.email_service import send_verification_email, send_welcome_email
 import secrets
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -71,14 +74,19 @@ async def signup(user_data: UserCreate):
         }
         supabase.table("user_rewards").insert(user_rewards).execute()
         
-        # Send verification email
+        # Send verification email (don't block if it fails)
         verification_link = f"{settings.BACKEND_URL}/api/auth/verify-email?token={verification_token}"
-        send_verification_email(user_data.email, user_data.username, verification_link)
+        email_sent = False
+        try:
+            email_sent = send_verification_email(user_data.email, user_data.username, verification_link)
+        except Exception as e:
+            logger.error(f"Failed to send verification email: {str(e)}")
         
         return {
-            "message": "Account created successfully. Please check your email to verify your account.",
+            "message": "Account created successfully. Please check your email to verify your account." if email_sent else "Account created. Email service unavailable - contact support for verification.",
             "email": user_data.email,
-            "username": user_data.username
+            "username": user_data.username,
+            "email_sent": email_sent
         }
         
     except HTTPException:
@@ -178,9 +186,12 @@ async def verify_email(token: str):
             "verification_token_expires": None
         }).eq("id", user["id"]).execute()
         
-        # Send welcome email
+        # Send welcome email (don't block if it fails)
         login_link = f"{settings.FRONTEND_URL}/login"
-        send_welcome_email(user["email"], user["username"], login_link)
+        try:
+            send_welcome_email(user["email"], user["username"], login_link)
+        except Exception as e:
+            logger.error(f"Failed to send welcome email: {str(e)}")
         
         # Return success with redirect
         return {
@@ -226,11 +237,14 @@ async def resend_verification(email: str):
             "verification_token_expires": verification_expires.isoformat()
         }).eq("id", user["id"]).execute()
         
-        # Send verification email
+        # Send verification email (don't block if it fails)
         verification_link = f"{settings.BACKEND_URL}/api/auth/verify-email?token={verification_token}"
-        send_verification_email(user["email"], user["username"], verification_link)
-        
-        return {"message": "Verification email sent. Please check your inbox."}
+        try:
+            send_verification_email(user["email"], user["username"], verification_link)
+            return {"message": "Verification email sent. Please check your inbox."}
+        except Exception as e:
+            logger.error(f"Failed to resend verification email: {str(e)}")
+            return {"message": "Failed to send email. Please try again later or contact support."}
         
     except Exception as e:
         raise HTTPException(
