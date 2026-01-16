@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status, Depends, Query
+from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
 from typing import List, Optional
 from datetime import datetime
 from app.models import Issue, IssueCreate, IssueUpdate, TimelineEvent, IssueStatus, IssueCategory, TokenData, TimelineEventType
@@ -6,6 +6,7 @@ from app.auth import get_current_user
 from app.database import get_supabase
 from app.storage import upload_base64_image, IMAGES_BUCKET
 from app.verification_worker import verify_issue_async
+from app.pre_ingestion_filter import PreIngestionFilter
 import json
 import base64
 import uuid
@@ -17,25 +18,109 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.post("", response_model=Issue, status_code=status.HTTP_201_CREATED)
-async def create_issue(issue_data: IssueCreate, current_user: TokenData = Depends(get_current_user)):
-    """Create a new issue report"""
+async def create_issue(
+    request: Request,
+    issue_data: IssueCreate,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Create a new issue report with pre-ingestion filtering"""
     supabase = get_supabase()
     
     try:
+        # ============================================
+        # PRE-INGESTION FILTERING (PROTECTION LAYER)
+        # Runs BEFORE image upload, BEFORE AI calls
+        # ============================================
+        
+        # Get client IP
+        client_ip = request.client.host if request.client else "unknown"
+        
+        # Only run filtering if image is provided
+        image_bytes = None
+        if issue_data.image and issue_data.image.startswith('data:image'):
+            try:
+                # Decode base64 image for filtering (don't upload yet!)
+                image_data = issue_data.image.split(',')[1] if ',' in issue_data.image else issue_data.image
+                image_bytes = base64.b64decode(image_data)
+            except Exception as e:
+                logger.error(f"Failed to decode image: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid image data"
+                )
+            
+            # Run all pre-ingestion filters
+            filter_service = PreIngestionFilter(supabase)
+            filter_result = await filter_service.run_all_checks(
+                user_id=current_user.user_id,
+                ip_address=client_ip,
+                image_bytes=image_bytes,
+                submission_data=issue_data.dict()
+            )
+            
+            # Handle shadow banned users (fake success)
+            if filter_result.is_shadow_banned:
+                logger.info(f"🎭 Shadow banned user {current_user.user_id} - returning fake success")
+                # Return a fake successful response (user doesn't know they're banned)
+                return Issue(
+                    id=str(uuid.uuid4()),
+                    title=issue_data.title,
+                    description=issue_data.description,
+                    category=issue_data.category,
+                    status=IssueStatus.UNRESOLVED,
+                    location=issue_data.location,
+                    image_url=issue_data.image_url,
+                    video_url=issue_data.video_url,
+                    reported_by=current_user.user_id,
+                    reported_at=datetime.utcnow(),
+                    upvotes=0,
+                    timeline=[],
+                    verification_status="pending",
+                    processed_at=None
+                )
+            
+            # Handle filter failures (real rejection)
+            if not filter_result.allowed:
+                logger.warning(f"❌ Pre-ingestion filter blocked submission from {current_user.user_id}: {filter_result.reason}")
+                
+                # Return appropriate error with retry_after header if applicable
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS if filter_result.retry_after else status.HTTP_400_BAD_REQUEST,
+                    detail=filter_result.reason,
+                    headers={"Retry-After": str(filter_result.retry_after)} if filter_result.retry_after else None
+                )
+            
+            logger.info(f"✅ Pre-ingestion filters passed for user {current_user.user_id}")
+        
+        # ============================================
+        # FILTERS PASSED - PROCEED WITH UPLOAD
+        # ============================================
+        
         # Handle image upload if base64 data is provided
         image_url = issue_data.image_url
         
-        if issue_data.image and issue_data.image.startswith('data:image'):
+        if issue_data.image and issue_data.image.startswith('data:image') and image_bytes:
             try:
-                # Upload base64 image to Supabase Storage
+                # NOW upload to Supabase Storage (after filters passed)
                 public_url, file_path = await upload_base64_image(
                     supabase, 
                     issue_data.image, 
                     current_user.user_id
                 )
                 image_url = public_url
+                
+                # Store image hash for future duplicate detection
+                filter_service = PreIngestionFilter(supabase)
+                await filter_service.post_upload_actions(
+                    current_user.user_id,
+                    client_ip,
+                    image_bytes,
+                    image_url,
+                    ""  # issue_id will be added later
+                )
+                
             except Exception as upload_error:
-                print(f"Image upload failed: {str(upload_error)}")
+                logger.error(f"Image upload failed: {str(upload_error)}")
                 # Continue without image if upload fails
                 image_url = None
         

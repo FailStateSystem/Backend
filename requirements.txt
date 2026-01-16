@@ -16,3 +16,12 @@ resend==0.8.0
 openai==1.12.0
 httpx==0.26.0
 
+# Pre-ingestion filtering dependencies
+nudenet==2.0.9           # NSFW detection
+imagehash==4.3.1         # Duplicate detection (perceptual hashing)
+opencv-python==4.9.0.80  # Garbage image detection
+pytesseract==0.3.10      # OCR for screenshot/meme detection
+exifread==3.0.0          # EXIF metadata extraction
+scikit-image==0.22.0     # Additional image processing
+numpy==1.26.3            # Required for image processing
+
