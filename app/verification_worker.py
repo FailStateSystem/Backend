@@ -122,9 +122,19 @@ class VerificationWorker:
     async def create_rejected_issue(self, original_issue: dict, verification: AIVerificationResponse):
         """Create entry in issues_rejected table"""
         try:
+            # Determine rejection reason based on AI response
+            rejection_reason = "ai_verification_failed"
+            
+            if verification.is_nsfw:
+                rejection_reason = "nsfw_content_detected"
+            elif verification.is_screenshot:
+                rejection_reason = "screenshot_or_meme_detected"
+            elif not verification.is_genuine:
+                rejection_reason = "not_genuine_civic_issue"
+            
             rejected_data = {
                 "original_issue_id": original_issue["id"],
-                "rejection_reason": "ai_verification_failed",
+                "rejection_reason": rejection_reason,
                 "ai_reasoning": verification.reasoning,
                 "confidence_score": verification.confidence_score,
                 "rejected_by": "ai_verification"
@@ -133,7 +143,7 @@ class VerificationWorker:
             result = self.supabase.table("issues_rejected").insert(rejected_data).execute()
             
             if result.data:
-                logger.info(f"✅ Created rejected issue for {original_issue['id']}")
+                logger.info(f"✅ Created rejected issue for {original_issue['id']} - Reason: {rejection_reason}")
                 return result.data[0]
             else:
                 logger.error(f"Failed to create rejected issue - no data returned")
@@ -245,16 +255,44 @@ class VerificationWorker:
             
             processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
             
+            # Check for content violations first
+            should_reject = False
+            rejection_type = None
+            
+            if verification.is_nsfw:
+                should_reject = True
+                rejection_type = "NSFW content"
+                logger.warning(f"🚫 Issue {issue_id} contains NSFW content")
+            elif verification.is_screenshot:
+                should_reject = True
+                rejection_type = "Screenshot/Meme"
+                logger.warning(f"🚫 Issue {issue_id} is a screenshot or meme")
+            elif not verification.is_genuine:
+                should_reject = True
+                rejection_type = "Not genuine"
+                logger.info(f"❌ Issue {issue_id} is not a genuine civic issue")
+            
             # Log successful verification
             await self.log_audit(
                 issue_id, 
-                "verified" if verification.is_genuine else "rejected",
+                "rejected" if should_reject else "verified",
                 ai_response=verification.dict(),
                 processing_time_ms=processing_time
             )
             
             # Route based on verification result
-            if verification.is_genuine:
+            if should_reject:
+                logger.info(f"❌ Issue {issue_id} REJECTED - {rejection_type} (confidence: {verification.confidence_score})")
+                
+                rejected_issue = await self.create_rejected_issue(issue, verification)
+                
+                if rejected_issue:
+                    await self.mark_issue_processed(issue_id, "rejected")
+                    return True
+                else:
+                    await self.mark_issue_processed(issue_id, "failed")
+                    return False
+            else:
                 logger.info(f"✅ Issue {issue_id} verified as GENUINE (confidence: {verification.confidence_score})")
                 
                 verified_issue = await self.create_verified_issue(issue, verification)
@@ -262,17 +300,6 @@ class VerificationWorker:
                 if verified_issue:
                     await self.mark_issue_processed(issue_id, "verified")
                     await self.trigger_post_verification_hooks(verified_issue, issue)
-                    return True
-                else:
-                    await self.mark_issue_processed(issue_id, "failed")
-                    return False
-            else:
-                logger.info(f"❌ Issue {issue_id} verified as FAKE (confidence: {verification.confidence_score})")
-                
-                rejected_issue = await self.create_rejected_issue(issue, verification)
-                
-                if rejected_issue:
-                    await self.mark_issue_processed(issue_id, "rejected")
                     return True
                 else:
                     await self.mark_issue_processed(issue_id, "failed")

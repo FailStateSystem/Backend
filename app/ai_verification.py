@@ -30,12 +30,18 @@ class AIVerificationResponse(BaseModel):
     public_impact: str
     tags: list[str] = Field(default_factory=list)
     content_warnings: list[str] = Field(default_factory=list)
+    
+    # Additional checks when pre-ingestion filters are unavailable
+    is_nsfw: bool = False  # True if image contains NSFW content
+    is_screenshot: bool = False  # True if image is a screenshot/meme
 
 
 SYSTEM_PROMPT = """You are a civic issue verification and analysis engine.
 
 Your job is to:
 - Determine if a reported civic issue is genuine or fake.
+- Check if the image contains NSFW content (nudity, explicit content, violence, gore).
+- Check if the image is a screenshot, meme, or social media post (rather than a real photo).
 - Analyze the image and description together.
 - Assess severity.
 - Generate public-safe, factual, dramatic but non-defamatory content.
@@ -49,7 +55,12 @@ Never assign blame.
 Never speculate intent.
 Only describe observable reality.
 
-Use neutral, factual language."""
+Use neutral, factual language.
+
+IMPORTANT CONTENT CHECKS:
+- Mark is_nsfw=true if the image contains any nudity, sexual content, extreme violence, or gore.
+- Mark is_screenshot=true if the image is clearly a screenshot of a phone/computer, a meme with text overlays, or a social media post.
+- These checks are critical for content safety and quality."""
 
 
 def create_user_prompt(description: str, lat: float, lng: float) -> str:
@@ -62,11 +73,15 @@ Location: {lat}, {lng}
 Image: Provided in image content
 
 TASKS:
-1. Verify if this is a real-world, genuine civic/infrastructure issue.
-2. Detect if the image appears AI-generated, edited, meme-like, or fake.
-3. Check if the image and description are semantically consistent.
-4. Assess severity: low, moderate, or high.
-5. Generate:
+1. **CONTENT SAFETY CHECKS** (Critical - check these first):
+   - Check if image contains NSFW content (nudity, sexual content, extreme violence, gore)
+   - Check if image is a screenshot, meme, or social media post
+   
+2. Verify if this is a real-world, genuine civic/infrastructure issue.
+3. Detect if the image appears AI-generated, edited, or fake.
+4. Check if the image and description are semantically consistent.
+5. Assess severity: low, moderate, or high.
+6. Generate:
    - A public-facing dramatic but factual title
    - A refined public description
    - A public impact explanation
@@ -83,6 +98,8 @@ RULES:
 OUTPUT FORMAT (JSON ONLY):
 {{
   "is_genuine": true/false,
+  "is_nsfw": true/false,
+  "is_screenshot": true/false,
   "confidence_score": 0-1,
   "reasoning": "Short explanation",
   "severity": "low | moderate | high",
@@ -91,7 +108,9 @@ OUTPUT FORMAT (JSON ONLY):
   "public_impact": "",
   "tags": ["", "", ""],
   "content_warnings": []
-}}"""
+}}
+
+NOTE: If is_nsfw=true OR is_screenshot=true, you should also set is_genuine=false and explain why in reasoning."""
 
 
 async def verify_issue_with_ai(
