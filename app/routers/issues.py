@@ -109,16 +109,6 @@ async def create_issue(
                 )
                 image_url = public_url
                 
-                # Store image hash for future duplicate detection
-                filter_service = PreIngestionFilter(supabase)
-                await filter_service.post_upload_actions(
-                    current_user.user_id,
-                    client_ip,
-                    image_bytes,
-                    image_url,
-                    ""  # issue_id will be added later
-                )
-                
             except Exception as upload_error:
                 logger.error(f"Image upload failed: {str(upload_error)}")
                 # Continue without image if upload fails
@@ -165,6 +155,21 @@ async def create_issue(
         # Note: Rewards will be awarded ONLY after successful verification
         asyncio.create_task(verify_issue_async(issue["id"]))
         logger.info(f"Issue {issue['id']} created - queued for AI verification")
+        
+        # Store image hash for duplicate detection (now that we have issue_id)
+        if image_bytes and image_url:
+            try:
+                filter_service = PreIngestionFilter(supabase)
+                await filter_service.post_upload_actions(
+                    current_user.user_id,
+                    client_ip,
+                    image_bytes,
+                    image_url,
+                    issue["id"]  # Now we have the actual issue_id
+                )
+            except Exception as e:
+                logger.error(f"Failed to store image hash: {e}")
+                # Don't fail the request, just log the error
         
         # Return the created issue (from original issues table, not verified yet)
         return await build_issue_response(issue)
