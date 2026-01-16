@@ -14,6 +14,7 @@ import imagehash
 import cv2
 import numpy as np
 import exifread
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,9 @@ class NSFWDetector:
         except ImportError:
             logger.warning("⚠️ NudeNet not installed - NSFW detection disabled")
         except Exception as e:
-            logger.error(f"Failed to initialize NSFWDetector: {e}")
+            logger.warning(f"⚠️ Failed to initialize NSFWDetector: {e}")
+            logger.warning("NSFW detection will be disabled. This is OK for testing.")
+            self.detector = None
     
     async def check(self, image_bytes: bytes) -> FilterResult:
         """Check if image is NSFW"""
@@ -326,30 +329,43 @@ class GarbageDetector:
                 )
             
             # Check 3: Blur detection (Laplacian variance)
+            # Note: Only block EXTREMELY blurry images (< 10)
+            # Users with poor cameras should still be able to report issues
+            # AI can handle slightly blurry images
             laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-            if laplacian_var < 50:
+            if laplacian_var < 10:  # Very low threshold - only block if unrecognizable
                 return FilterResult(
                     False,
                     "garbage",
-                    "Image is extremely blurry",
+                    "Image is too blurry to recognize. Please take a clearer photo.",
                     "low",
                     {"blur_score": float(laplacian_var)}
                 )
             
-            # Check 4: Entropy (information content)
-            from skimage.filters.rank import entropy
-            from skimage.morphology import disk
-            entropy_img = entropy(gray, disk(5))
-            mean_entropy = np.mean(entropy_img)
+            # Warn but don't block for moderately blurry images (10-50)
+            if laplacian_var < 50:
+                logger.info(f"Image slightly blurry (score: {laplacian_var:.2f}) but allowing - AI can handle it")
             
-            if mean_entropy < 2.0:
-                return FilterResult(
-                    False,
-                    "garbage",
-                    "Image has very low information content",
-                    "medium",
-                    {"entropy": float(mean_entropy)}
-                )
+            # Check 4: Entropy (information content)
+            # Lower threshold to allow real-world photos with simpler content
+            try:
+                from skimage.filters.rank import entropy
+                from skimage.morphology import disk
+                entropy_img = entropy(gray, disk(5))
+                mean_entropy = np.mean(entropy_img)
+                
+                # Only block if entropy is VERY low (< 1.0) - pure solid colors
+                if mean_entropy < 1.0:
+                    return FilterResult(
+                        False,
+                        "garbage",
+                        "Image has very low information content",
+                        "medium",
+                        {"entropy": float(mean_entropy)}
+                    )
+            except Exception as e:
+                # If entropy calculation fails, don't block
+                logger.debug(f"Entropy calculation failed: {e}")
             
             # Check 5: Image too small
             height, width = img.shape[:2]
@@ -454,41 +470,60 @@ class ContentFilterService:
         results = {}
         
         # 1. NSFW Detection (CRITICAL - must pass)
-        logger.info(f"🔍 Running NSFW filter for user {user_id}")
-        nsfw_result = await self.nsfw_detector.check(image_bytes)
-        results['nsfw'] = nsfw_result
-        if not nsfw_result.passed:
-            logger.warning(f"❌ NSFW detected for user {user_id}")
-            return False, results
+        if settings.ENABLE_NSFW_FILTER:
+            logger.info(f"🔍 Running NSFW filter for user {user_id}")
+            nsfw_result = await self.nsfw_detector.check(image_bytes)
+            results['nsfw'] = nsfw_result
+            if not nsfw_result.passed:
+                logger.warning(f"❌ NSFW detected for user {user_id}")
+                return False, results
+        else:
+            logger.info("NSFW filter disabled via config")
+            results['nsfw'] = FilterResult(True, "nsfw", "Disabled")
         
         # 2. Duplicate Detection (HIGH - must pass)
-        logger.info(f"🔍 Running duplicate filter for user {user_id}")
-        duplicate_result = await self.duplicate_detector.check(image_bytes, user_id, ip_address)
-        results['duplicate'] = duplicate_result
-        if not duplicate_result.passed:
-            logger.warning(f"❌ Duplicate detected for user {user_id}")
-            return False, results
+        if settings.ENABLE_DUPLICATE_FILTER:
+            logger.info(f"🔍 Running duplicate filter for user {user_id}")
+            duplicate_result = await self.duplicate_detector.check(image_bytes, user_id, ip_address)
+            results['duplicate'] = duplicate_result
+            if not duplicate_result.passed:
+                logger.warning(f"❌ Duplicate detected for user {user_id}")
+                return False, results
+        else:
+            logger.info("Duplicate filter disabled via config")
+            results['duplicate'] = FilterResult(True, "duplicate", "Disabled")
         
         # 3. OCR / Screenshot Detection (MEDIUM - must pass)
-        logger.info(f"🔍 Running OCR filter for user {user_id}")
-        ocr_result = await self.ocr_detector.check(image_bytes)
-        results['ocr'] = ocr_result
-        if not ocr_result.passed:
-            logger.warning(f"❌ Screenshot/OCR detected for user {user_id}")
-            return False, results
+        if settings.ENABLE_OCR_FILTER:
+            logger.info(f"🔍 Running OCR filter for user {user_id}")
+            ocr_result = await self.ocr_detector.check(image_bytes)
+            results['ocr'] = ocr_result
+            if not ocr_result.passed:
+                logger.warning(f"❌ Screenshot/OCR detected for user {user_id}")
+                return False, results
+        else:
+            logger.info("OCR filter disabled via config")
+            results['ocr'] = FilterResult(True, "ocr", "Disabled")
         
         # 4. Garbage Image Detection (MEDIUM - must pass)
-        logger.info(f"🔍 Running garbage filter for user {user_id}")
-        garbage_result = await self.garbage_detector.check(image_bytes)
-        results['garbage'] = garbage_result
-        if not garbage_result.passed:
-            logger.warning(f"❌ Garbage image detected for user {user_id}")
-            return False, results
+        if settings.ENABLE_GARBAGE_FILTER:
+            logger.info(f"🔍 Running garbage filter for user {user_id}")
+            garbage_result = await self.garbage_detector.check(image_bytes)
+            results['garbage'] = garbage_result
+            if not garbage_result.passed:
+                logger.warning(f"❌ Garbage image detected for user {user_id}")
+                return False, results
+        else:
+            logger.info("Garbage filter disabled via config")
+            results['garbage'] = FilterResult(True, "garbage", "Disabled")
         
         # 5. EXIF Metadata Check (INFO ONLY - always passes)
-        logger.info(f"🔍 Running EXIF check for user {user_id}")
-        exif_result = await self.exif_checker.check(image_bytes)
-        results['exif'] = exif_result
+        if settings.ENABLE_EXIF_CHECK:
+            logger.info(f"🔍 Running EXIF check for user {user_id}")
+            exif_result = await self.exif_checker.check(image_bytes)
+            results['exif'] = exif_result
+        else:
+            results['exif'] = FilterResult(True, "exif", "Disabled")
         
         logger.info(f"✅ All filters passed for user {user_id}")
         return True, results

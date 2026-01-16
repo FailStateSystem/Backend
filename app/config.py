@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     AI_MAX_RETRIES: int = 3
     AI_TIMEOUT_SECONDS: int = 30
     
+    # Content Filtering (optional toggles for production tuning)
+    ENABLE_NSFW_FILTER: bool = True      # Disable if NudeNet issues
+    ENABLE_DUPLICATE_FILTER: bool = True
+    ENABLE_OCR_FILTER: bool = True       # Auto-disabled if Tesseract not available
+    ENABLE_GARBAGE_FILTER: bool = True    # Disable if too strict
+    ENABLE_EXIF_CHECK: bool = True
+    
     # Application
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
