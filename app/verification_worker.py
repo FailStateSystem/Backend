@@ -170,6 +170,8 @@ class VerificationWorker:
                 rejection_reason = "screenshot_or_meme_detected"
             
             # Call database function to apply penalty
+            # Note: Supabase RPC with JSON return can throw APIError even on success
+            penalty_info = None
             try:
                 result = self.supabase.rpc("apply_fake_submission_penalty", {
                     "p_user_id": user_id,
@@ -184,38 +186,57 @@ class VerificationWorker:
                     # If data is a list, get first element (Supabase RPC returns single value as list)
                     penalty_info = result.data[0] if isinstance(result.data, list) else result.data
                     
-                    penalty_applied = penalty_info.get("penalty_applied")
-                    points_deducted = penalty_info.get("points_deducted", 0)
-                    account_status = penalty_info.get("account_status")
-                    message = penalty_info.get("message")
-                    
-                    logger.info(f"⚠️ Penalty applied to user {user_id}: {penalty_applied}")
-                    logger.info(f"   Points deducted: {points_deducted}, Status: {account_status}")
-                    logger.info(f"   Message: {message}")
-                    
-                    # Send email notification about rejection and penalty
-                    await self.send_rejection_email(
-                        original_issue,
-                        rejection_reason,
-                        penalty_applied,
-                        points_deducted,
-                        account_status,
-                        message
-                    )
-                else:
-                    logger.error(f"Failed to apply penalty - no data returned from function")
-                    
             except Exception as rpc_error:
-                # If RPC call fails, log but don't crash - penalty application is not critical
-                logger.warning(f"RPC call failed (penalty not applied): {rpc_error}")
-                # Still send email with default values
+                # Supabase throws APIError when RPC returns raw JSON, but penalty is actually applied
+                # Try to extract the penalty info from the error message
+                error_str = str(rpc_error)
+                if "penalty_applied" in error_str and "rejection_count" in error_str:
+                    # Parse the JSON from error message (it's actually the successful response)
+                    try:
+                        import json
+                        # Extract JSON from error string
+                        json_start = error_str.find("{")
+                        json_end = error_str.rfind("}") + 1
+                        if json_start >= 0 and json_end > json_start:
+                            penalty_info = json.loads(error_str[json_start:json_end])
+                            logger.info(f"✅ Extracted penalty info from RPC 'error' (actually success)")
+                    except:
+                        pass
+                
+                if not penalty_info:
+                    # True error - penalty really failed
+                    logger.error(f"❌ RPC call actually failed: {rpc_error}")
+            
+            # Send email with penalty info
+            if penalty_info:
+                penalty_applied = penalty_info.get("penalty_applied")
+                points_deducted = penalty_info.get("points_deducted", 0)
+                account_status = penalty_info.get("account_status")
+                message = penalty_info.get("message")
+                
+                logger.info(f"⚠️ Penalty applied to user {user_id}: {penalty_applied}")
+                logger.info(f"   Points deducted: {points_deducted}, Status: {account_status}")
+                logger.info(f"   Message: {message}")
+                
+                # Send email notification about rejection and penalty
                 await self.send_rejection_email(
                     original_issue,
                     rejection_reason,
-                    "penalty_error",
+                    penalty_applied,
+                    points_deducted,
+                    account_status,
+                    message
+                )
+            else:
+                # Truly failed - send generic rejection email without penalty details
+                logger.error(f"Failed to apply penalty - sending generic rejection email")
+                await self.send_rejection_email(
+                    original_issue,
+                    rejection_reason,
+                    "system_error",
                     0,
                     "active",
-                    "Unable to apply penalty automatically. Please contact support."
+                    "This submission violates our guidelines. Repeated violations may result in penalties."
                 )
             
         except Exception as e:
