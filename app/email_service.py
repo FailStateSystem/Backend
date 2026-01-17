@@ -646,7 +646,8 @@ async def send_rejection_notification(
     penalty_applied: str,
     points_deducted: int,
     account_status: str,
-    warning_message: str
+    warning_message: str,
+    rejection_count: int = 0
 ) -> bool:
     """
     Send notification when issue is rejected with penalty info
@@ -670,6 +671,13 @@ async def send_rejection_notification(
     else:
         status_color = "#ffa500"
         status_text = "⚠️ WARNING"
+    
+    # Build violation history text
+    if rejection_count > 0:
+        ordinal = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 5: "5th"}.get(rejection_count, f"{rejection_count}th")
+        violations_text = f"This is your <strong style='color: {status_color};'>{ordinal} violation</strong>."
+    else:
+        violations_text = ""
     
     html_content = f"""
 <!DOCTYPE html>
@@ -711,6 +719,10 @@ async def send_rejection_notification(
               
               <p style="font-size: 14px; line-height: 1.75; color: #b5b9c5; margin: 0 0 18px 0;">
                 Your recent submission has been rejected by our AI verification system.
+              </p>
+              
+              <p style="font-size: 14px; line-height: 1.75; color: #b5b9c5; margin: 0 0 18px 0;">
+                {violations_text}
               </p>
               
               <!-- Divider -->
@@ -797,6 +809,7 @@ FailState System - Issue Rejected
 Hello {username},
 
 Your recent submission has been rejected by our AI verification system.
+{violations_text.replace('<strong style=', '').replace('</strong>', '').replace("'color: " + status_color + ";'>", '')}
 
 REJECTION DETAILS:
 Your Description: {issue_description[:200]}

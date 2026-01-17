@@ -194,12 +194,36 @@ class VerificationWorker:
                     # Parse the JSON from error message (it's actually the successful response)
                     try:
                         import json
-                        # Extract JSON from error string
-                        json_start = error_str.find("{")
-                        json_end = error_str.rfind("}") + 1
-                        if json_start >= 0 and json_end > json_start:
-                            penalty_info = json.loads(error_str[json_start:json_end])
+                        import re
+                        
+                        # Try multiple extraction methods
+                        # Method 1: Direct dict from error
+                        if hasattr(rpc_error, 'json') and callable(rpc_error.json):
+                            penalty_info = rpc_error.json()
+                            logger.info(f"✅ Extracted penalty info from error.json() method")
+                        # Method 2: Parse from string representation
+                        elif "{" in error_str and "}" in error_str:
+                            json_start = error_str.find("{")
+                            json_end = error_str.rfind("}") + 1
+                            json_str = error_str[json_start:json_end]
+                            # Replace single quotes with double quotes for valid JSON
+                            json_str = json_str.replace("'", '"')
+                            penalty_info = json.loads(json_str)
                             logger.info(f"✅ Extracted penalty info from RPC 'error' (actually success)")
+                        # Method 3: Direct dict access if error is dict-like
+                        elif hasattr(rpc_error, '__dict__') and 'penalty_applied' in str(rpc_error.__dict__):
+                            penalty_info = rpc_error.__dict__
+                            logger.info(f"✅ Extracted penalty info from error.__dict__")
+                            
+                    except Exception as parse_error:
+                        logger.warning(f"Failed to parse penalty info: {parse_error}")
+                
+                # Last resort: try to access error as dict directly
+                if not penalty_info and hasattr(rpc_error, 'args') and len(rpc_error.args) > 0:
+                    try:
+                        if isinstance(rpc_error.args[0], dict) and 'penalty_applied' in rpc_error.args[0]:
+                            penalty_info = rpc_error.args[0]
+                            logger.info(f"✅ Extracted penalty info from error.args")
                     except:
                         pass
                 
@@ -213,9 +237,10 @@ class VerificationWorker:
                 points_deducted = penalty_info.get("points_deducted", 0)
                 account_status = penalty_info.get("account_status")
                 message = penalty_info.get("message")
+                rejection_count = penalty_info.get("rejection_count", 0)
                 
                 logger.info(f"⚠️ Penalty applied to user {user_id}: {penalty_applied}")
-                logger.info(f"   Points deducted: {points_deducted}, Status: {account_status}")
+                logger.info(f"   Rejection count: {rejection_count}, Points deducted: {points_deducted}, Status: {account_status}")
                 logger.info(f"   Message: {message}")
                 
                 # Send email notification about rejection and penalty
@@ -225,7 +250,8 @@ class VerificationWorker:
                     penalty_applied,
                     points_deducted,
                     account_status,
-                    message
+                    message,
+                    rejection_count
                 )
             else:
                 # Truly failed - send generic rejection email without penalty details
@@ -236,7 +262,8 @@ class VerificationWorker:
                     "system_error",
                     0,
                     "active",
-                    "This submission violates our guidelines. Repeated violations may result in penalties."
+                    "This submission violates our guidelines. Repeated violations may result in penalties.",
+                    0  # rejection_count unknown
                 )
             
         except Exception as e:
@@ -250,7 +277,8 @@ class VerificationWorker:
         penalty_applied: str,
         points_deducted: int,
         account_status: str,
-        message: str
+        message: str,
+        rejection_count: int = 0
     ):
         """
         Send email notification about issue rejection
@@ -277,7 +305,8 @@ class VerificationWorker:
                 penalty_applied=penalty_applied,
                 points_deducted=points_deducted,
                 account_status=account_status,
-                warning_message=message
+                warning_message=message,
+                rejection_count=rejection_count
             )
             
             logger.info(f"📧 Sent rejection email to {user['email']}")
