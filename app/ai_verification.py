@@ -5,6 +5,7 @@ Handles OpenAI integration for issue verification and enrichment
 
 import logging
 import json
+import base64
 from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
@@ -113,6 +114,38 @@ OUTPUT FORMAT (JSON ONLY):
 NOTE: If is_nsfw=true OR is_screenshot=true, you should also set is_genuine=false and explain why in reasoning."""
 
 
+async def download_image_as_base64(image_url: str) -> Optional[str]:
+    """
+    Download image from Supabase and convert to base64 to avoid OpenAI timeout
+    
+    OpenAI has issues downloading directly from some Supabase URLs due to timeouts.
+    This function downloads the image first and sends it as base64 data URI.
+    """
+    try:
+        logger.info(f"📥 Downloading image from Supabase: {image_url[:80]}...")
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(image_url)
+            response.raise_for_status()
+            
+            # Get content type
+            content_type = response.headers.get('content-type', 'image/jpeg')
+            
+            # Convert to base64
+            image_data = response.content
+            base64_image = base64.b64encode(image_data).decode('utf-8')
+            
+            # Create data URI
+            data_uri = f"data:{content_type};base64,{base64_image}"
+            
+            logger.info(f"✅ Downloaded and encoded image ({len(image_data)} bytes)")
+            return data_uri
+            
+    except Exception as e:
+        logger.error(f"Failed to download image from {image_url}: {e}")
+        return None
+
+
 async def verify_issue_with_ai(
     image_url: str,
     description: str,
@@ -144,11 +177,18 @@ async def verify_issue_with_ai(
     retries = max_retries or settings.AI_MAX_RETRIES
     user_prompt = create_user_prompt(description, lat, lng)
     
+    # Download image and convert to base64 to avoid OpenAI timeout issues
+    image_data_uri = await download_image_as_base64(image_url)
+    
+    if not image_data_uri:
+        logger.error("Failed to download image for AI verification")
+        return None
+    
     for attempt in range(1, retries + 1):
         try:
             logger.info(f"AI verification attempt {attempt}/{retries}")
             
-            # Call OpenAI with vision
+            # Call OpenAI with vision using base64-encoded image
             response = await client.chat.completions.create(
                 model=settings.OPENAI_MODEL,
                 messages=[
@@ -166,7 +206,7 @@ async def verify_issue_with_ai(
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                    "url": image_url,
+                                    "url": image_data_uri,  # Use base64 data URI
                                     "detail": "high"
                                 }
                             }

@@ -132,6 +132,7 @@ class Issue(IssueBase):
     timeline: List[TimelineEvent] = []
     verification_status: Optional[str] = "pending"  # AI verification status
     processed_at: Optional[datetime] = None  # When AI verification completed
+    rejection_reason: Optional[str] = None  # Reason for rejection (if rejected)
 
     class Config:
         from_attributes = True

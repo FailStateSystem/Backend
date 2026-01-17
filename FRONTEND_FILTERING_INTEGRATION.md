@@ -762,3 +762,139 @@ Eventually: All submissions fake-accepted but discarded
 
 **Frontend changes are optional but highly recommended for better UX!** 🎨
 
+---
+
+## 🛡️ AI Fallback Filtering (Automatic)
+
+### **What is it?**
+
+The system now has **two layers of protection**:
+
+1. **Layer 1:** Pre-ingestion filters (NSFW, screenshot, duplicate, etc.)
+2. **Layer 2:** AI verification (GPT-4o Vision)
+
+If pre-ingestion filters are unavailable (e.g., NudeNet or Tesseract not installed), the AI automatically acts as a fallback by checking for:
+- NSFW content
+- Screenshots/memes
+- Genuine civic issues
+
+### **Why This Matters for Frontend**
+
+Users might see different verification times depending on which layer catches issues:
+
+| Scenario | Layer | Time | User Experience |
+|----------|-------|------|-----------------|
+| NSFW detected by NudeNet | Layer 1 | Instant | Immediate error message |
+| NSFW detected by AI | Layer 2 | 2-5 seconds | "Submitted for verification" → later rejected |
+| Screenshot detected by Tesseract | Layer 1 | Instant | Immediate error message |
+| Screenshot detected by AI | Layer 2 | 2-5 seconds | "Submitted for verification" → later rejected |
+
+### **Recommended UX Enhancement**
+
+Since some issues might be rejected **after** submission (when Layer 1 filters are unavailable), consider:
+
+**1. Show Pending State:**
+```typescript
+// After successful submission
+toast.success('Issue submitted! Verifying content...');
+
+// Add to user's dashboard as "Pending Verification"
+// Poll verification status every 5 seconds
+const checkStatus = async (issueId) => {
+  const status = await fetch(`/api/issues/${issueId}/verification-status`);
+  
+  if (status.verification_status === 'verified') {
+    // Show success notification
+    toast.success('Issue verified and published!');
+  } else if (status.verification_status === 'rejected') {
+    // Show rejection reason
+    toast.error('Issue rejected: Content does not meet guidelines.');
+  }
+};
+```
+
+**2. Display Verification Status:**
+```typescript
+// In user's "My Issues" page
+{issues.map(issue => (
+  <IssueCard key={issue.id}>
+    <Title>{issue.description}</Title>
+    
+    {issue.verification_status === 'pending' && (
+      <Badge color="yellow">
+        <Spinner /> Verifying...
+      </Badge>
+    )}
+    
+    {issue.verification_status === 'verified' && (
+      <Badge color="green">✅ Verified & Published</Badge>
+    )}
+    
+    {issue.verification_status === 'rejected' && (
+      <Badge color="red">❌ Rejected</Badge>
+    )}
+  </IssueCard>
+))}
+```
+
+**3. Rejection Reasons (Optional):**
+```typescript
+// If you want to show users why their issue was rejected
+{issue.verification_status === 'rejected' && (
+  <Alert type="warning">
+    <AlertTitle>Issue Not Published</AlertTitle>
+    <AlertDescription>
+      {getRejectionMessage(issue.rejection_reason)}
+    </AlertDescription>
+  </Alert>
+)}
+
+const getRejectionMessage = (reason) => {
+  switch (reason) {
+    case 'nsfw_content_detected':
+      return 'Image contains inappropriate content.';
+    case 'screenshot_or_meme_detected':
+      return 'Please upload original photos, not screenshots.';
+    case 'not_genuine_civic_issue':
+      return 'This does not appear to be a civic infrastructure issue.';
+    default:
+      return 'Content does not meet our guidelines.';
+  }
+};
+```
+
+### **API Endpoints for Verification Status**
+
+Already implemented in the backend:
+
+```typescript
+// Get single issue verification status
+GET /api/issues/{issue_id}/verification-status
+Response: {
+  issue_id: string;
+  verification_status: "pending" | "verified" | "rejected";
+  processed_at: string | null;
+}
+
+// Get user's issues (including pending)
+GET /api/issues/my-issues
+Response: [
+  {
+    id: string;
+    description: string;
+    image_url: string;
+    verification_status: "pending" | "verified" | "rejected";
+    processed_at: string | null;
+    ...
+  }
+]
+```
+
+### **No Action Required**
+
+The AI fallback filtering is **automatic** and **backend-only**. However, implementing the verification status UI will help users understand why some submissions take longer to appear.
+
+**See:** `AI_FALLBACK_FILTERING.md` for technical details.
+
+---
+

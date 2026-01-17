@@ -467,3 +467,361 @@ Records do not decay.
     
     return send_email(to_email, subject, html_content, text_content)
 
+
+async def send_verification_success_notification(
+    to_email: str,
+    username: str,
+    issue_title: str,
+    issue_description: str,
+    severity: str,
+    confidence_score: float,
+    points_awarded: int = 25
+) -> bool:
+    """
+    Send notification when issue is verified and published
+    """
+    subject = "✅ Issue Verified and Published — FailState System"
+    
+    # Format severity
+    severity_color = {
+        "low": "#78aaff",
+        "moderate": "#ffa500",
+        "high": "#ff4444"
+    }.get(severity.lower(), "#78aaff")
+    
+    severity_display = severity.upper()
+    
+    html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Issue Verified</title>
+</head>
+<body style="margin: 0; padding: 0; background: #07090d; font-family: 'Open Sans', Arial, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background: #07090d;">
+    <tr>
+      <td align="center" style="padding: 48px 24px;">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0">
+          
+          <!-- Logo -->
+          <tr>
+            <td align="center" style="padding-bottom: 6px;">
+              <h1 style="font-size: 38px; font-weight: 700; letter-spacing: 1px; color: #e5e7eb; margin: 0; text-shadow: 0 0 14px rgba(120, 160, 255, 0.25);">FailState</h1>
+            </td>
+          </tr>
+          
+          <!-- Tagline -->
+          <tr>
+            <td align="center" style="padding-bottom: 44px;">
+              <p style="font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: #9ca3af; margin: 0;">STILL BROKEN. STILL HERE.</p>
+            </td>
+          </tr>
+          
+          <!-- Main Content Panel -->
+          <tr>
+            <td style="background: rgba(16, 18, 24, 0.72); border: 1px solid rgba(255,255,255,0.06); border-radius: 16px; padding: 32px; box-shadow: 0 0 80px rgba(0,0,0,0.8);">
+              
+              <h2 style="font-size: 22px; color: #22c55e; margin: 0 0 18px 0; font-weight: 600; letter-spacing: 0.5px;">✅ Issue Verified</h2>
+              
+              <p style="font-size: 14px; line-height: 1.75; color: #b5b9c5; margin: 0 0 18px 0;">
+                Hello {username},
+              </p>
+              
+              <p style="font-size: 14px; line-height: 1.75; color: #b5b9c5; margin: 0 0 18px 0;">
+                Your submission has been verified by our AI analysis system and is now published in the FailState archive.
+              </p>
+              
+              <!-- Divider -->
+              <div style="height: 1px; background: linear-gradient(to right, transparent, rgba(255,255,255,0.12), transparent); margin: 32px 0;"></div>
+              
+              <h3 style="font-size: 16px; color: #e5e7eb; margin: 0 0 12px 0; font-weight: 600;">Issue Details</h3>
+              
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="8" border="0" style="margin: 0 0 18px 0;">
+                <tr>
+                  <td style="font-size: 12px; color: #9ca3af; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);">
+                    <strong>Title:</strong>
+                  </td>
+                  <td style="font-size: 12px; color: #e5e7eb; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);">
+                    {issue_title}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="font-size: 12px; color: #9ca3af; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);">
+                    <strong>Description:</strong>
+                  </td>
+                  <td style="font-size: 12px; color: #e5e7eb; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);">
+                    {issue_description[:150]}{"..." if len(issue_description) > 150 else ""}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="font-size: 12px; color: #9ca3af; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);">
+                    <strong>Severity:</strong>
+                  </td>
+                  <td style="font-size: 12px; color: {severity_color}; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-weight: 600;">
+                    {severity_display}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="font-size: 12px; color: #9ca3af; padding: 8px 0;">
+                    <strong>AI Confidence:</strong>
+                  </td>
+                  <td style="font-size: 12px; color: #e5e7eb; padding: 8px 0;">
+                    {int(confidence_score * 100)}%
+                  </td>
+                </tr>
+              </table>
+              
+              <!-- Divider -->
+              <div style="height: 1px; background: linear-gradient(to right, transparent, rgba(255,255,255,0.12), transparent); margin: 32px 0;"></div>
+              
+              <h3 style="font-size: 16px; color: #22c55e; margin: 0 0 12px 0; font-weight: 600;">🎁 Reward Earned</h3>
+              
+              <p style="font-size: 14px; line-height: 1.75; color: #b5b9c5; margin: 0 0 18px 0;">
+                <strong style="color: #22c55e; font-size: 20px;">+{points_awarded} points</strong> have been added to your account for submitting a verified civic issue.
+              </p>
+              
+              <p style="font-size: 14px; line-height: 1.75; color: #b5b9c5; margin: 0 0 18px 0;">
+                The system has automatically notified relevant authorities. Your issue is now part of the permanent record.
+              </p>
+              
+              <p style="font-size: 14px; line-height: 1.75; color: #b5b9c5; margin: 0 0 18px 0;">
+                What remains unfixed will remain visible.
+              </p>
+              
+            </td>
+          </tr>
+          
+          <!-- Footer -->
+          <tr>
+            <td align="center" style="padding-top: 44px;">
+              <p style="font-size: 11px; color: #6b7280; line-height: 1.6; margin: 0;">
+                FailState System — Records do not decay<br/>
+                This is an automated notification
+              </p>
+            </td>
+          </tr>
+          
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    """
+    
+    text_content = f"""
+FailState System - Issue Verified
+
+Hello {username},
+
+Your submission has been verified by our AI analysis system and is now published.
+
+ISSUE DETAILS:
+Title: {issue_title}
+Description: {issue_description[:200]}
+Severity: {severity_display}
+AI Confidence: {int(confidence_score * 100)}%
+
+REWARD EARNED:
++{points_awarded} points have been added to your account.
+
+The system has automatically notified relevant authorities. Your issue is now part of the permanent record.
+
+What remains unfixed will remain visible.
+
+---
+FailState System — Records do not decay
+    """
+    
+    return send_email(to_email, subject, html_content, text_content)
+
+
+async def send_rejection_notification(
+    to_email: str,
+    username: str,
+    issue_description: str,
+    rejection_reason: str,
+    penalty_applied: str,
+    points_deducted: int,
+    account_status: str,
+    warning_message: str
+) -> bool:
+    """
+    Send notification when issue is rejected with penalty info
+    """
+    subject = "❌ Issue Rejected — FailState System"
+    
+    # Format rejection reason for display
+    rejection_display = {
+        "nsfw_content_detected": "NSFW/Inappropriate Content Detected",
+        "screenshot_or_meme_detected": "Screenshot or Meme Detected (Photos Only)",
+        "not_genuine_civic_issue": "Not a Genuine Civic Issue"
+    }.get(rejection_reason, "Rejected by AI Verification")
+    
+    # Determine warning level color and text
+    if account_status == "suspended":
+        status_color = "#ff4444"
+        status_text = "🚫 ACCOUNT SUSPENDED"
+    elif points_deducted > 0:
+        status_color = "#ff8c00"
+        status_text = f"⚠️ PENALTY APPLIED: -{points_deducted} POINTS"
+    else:
+        status_color = "#ffa500"
+        status_text = "⚠️ WARNING"
+    
+    html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Issue Rejected</title>
+</head>
+<body style="margin: 0; padding: 0; background: #07090d; font-family: 'Open Sans', Arial, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background: #07090d;">
+    <tr>
+      <td align="center" style="padding: 48px 24px;">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0">
+          
+          <!-- Logo -->
+          <tr>
+            <td align="center" style="padding-bottom: 6px;">
+              <h1 style="font-size: 38px; font-weight: 700; letter-spacing: 1px; color: #e5e7eb; margin: 0; text-shadow: 0 0 14px rgba(120, 160, 255, 0.25);">FailState</h1>
+            </td>
+          </tr>
+          
+          <!-- Tagline -->
+          <tr>
+            <td align="center" style="padding-bottom: 44px;">
+              <p style="font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: #9ca3af; margin: 0;">STILL BROKEN. STILL HERE.</p>
+            </td>
+          </tr>
+          
+          <!-- Main Content Panel -->
+          <tr>
+            <td style="background: rgba(16, 18, 24, 0.72); border: 1px solid rgba(255,255,255,0.06); border-radius: 16px; padding: 32px; box-shadow: 0 0 80px rgba(0,0,0,0.8);">
+              
+              <h2 style="font-size: 22px; color: #ff4444; margin: 0 0 18px 0; font-weight: 600; letter-spacing: 0.5px;">❌ Issue Rejected</h2>
+              
+              <p style="font-size: 14px; line-height: 1.75; color: #b5b9c5; margin: 0 0 18px 0;">
+                Hello {username},
+              </p>
+              
+              <p style="font-size: 14px; line-height: 1.75; color: #b5b9c5; margin: 0 0 18px 0;">
+                Your recent submission has been rejected by our AI verification system.
+              </p>
+              
+              <!-- Divider -->
+              <div style="height: 1px; background: linear-gradient(to right, transparent, rgba(255,255,255,0.12), transparent); margin: 32px 0;"></div>
+              
+              <h3 style="font-size: 16px; color: #e5e7eb; margin: 0 0 12px 0; font-weight: 600;">Rejection Details</h3>
+              
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="8" border="0" style="margin: 0 0 18px 0;">
+                <tr>
+                  <td style="font-size: 12px; color: #9ca3af; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);">
+                    <strong>Your Description:</strong>
+                  </td>
+                  <td style="font-size: 12px; color: #e5e7eb; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);">
+                    {issue_description[:150]}{"..." if len(issue_description) > 150 else ""}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="font-size: 12px; color: #9ca3af; padding: 8px 0;">
+                    <strong>Reason:</strong>
+                  </td>
+                  <td style="font-size: 12px; color: #ff4444; padding: 8px 0; font-weight: 600;">
+                    {rejection_display}
+                  </td>
+                </tr>
+              </table>
+              
+              <!-- Divider -->
+              <div style="height: 1px; background: linear-gradient(to right, transparent, rgba(255,255,255,0.12), transparent); margin: 32px 0;"></div>
+              
+              <h3 style="font-size: 16px; color: {status_color}; margin: 0 0 12px 0; font-weight: 600;">{status_text}</h3>
+              
+              <p style="font-size: 14px; line-height: 1.75; color: #b5b9c5; margin: 0 0 18px 0; padding: 16px; background: rgba(255, 68, 68, 0.1); border-left: 3px solid {status_color}; border-radius: 4px;">
+                {warning_message}
+              </p>
+              
+              <!-- Divider -->
+              <div style="height: 1px; background: linear-gradient(to right, transparent, rgba(255,255,255,0.12), transparent); margin: 32px 0;"></div>
+              
+              <h3 style="font-size: 16px; color: #e5e7eb; margin: 0 0 12px 0; font-weight: 600;">ℹ️ Platform Guidelines</h3>
+              
+              <p style="font-size: 14px; line-height: 1.75; color: #b5b9c5; margin: 0 0 12px 0;">
+                FailState is designed for reporting <strong style="color: #e5e7eb;">genuine civic infrastructure issues only</strong>.
+              </p>
+              
+              <ul style="font-size: 14px; line-height: 1.75; color: #b5b9c5; margin: 0 0 18px 0; padding-left: 20px;">
+                <li style="margin-bottom: 8px;">Submit <strong style="color: #e5e7eb;">real photos</strong> taken by you (not screenshots, memes, or downloads)</li>
+                <li style="margin-bottom: 8px;">Report <strong style="color: #e5e7eb;">actual infrastructure problems</strong> (roads, lights, utilities, etc.)</li>
+                <li style="margin-bottom: 8px;">No NSFW, inappropriate, or offensive content</li>
+                <li style="margin-bottom: 8px;">No fake, staged, or misleading submissions</li>
+              </ul>
+              
+              <p style="font-size: 13px; line-height: 1.75; color: #ff8c00; margin: 0; font-weight: 600;">
+                ⚠️ Progressive Enforcement Policy:<br/>
+                • 1st & 2nd rejection: Warning<br/>
+                • 3rd rejection: 10 points deducted<br/>
+                • 4th rejection: 25 points deducted<br/>
+                • 5th+ rejection: Account suspended
+              </p>
+              
+            </td>
+          </tr>
+          
+          <!-- Footer -->
+          <tr>
+            <td align="center" style="padding-top: 44px;">
+              <p style="font-size: 11px; color: #6b7280; line-height: 1.6; margin: 0;">
+                FailState System — Protecting platform integrity<br/>
+                This is an automated enforcement notification
+              </p>
+            </td>
+          </tr>
+          
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    """
+    
+    text_content = f"""
+FailState System - Issue Rejected
+
+Hello {username},
+
+Your recent submission has been rejected by our AI verification system.
+
+REJECTION DETAILS:
+Your Description: {issue_description[:200]}
+Reason: {rejection_display}
+
+{status_text}
+{warning_message}
+
+PLATFORM GUIDELINES:
+FailState is for reporting genuine civic infrastructure issues only.
+
+- Submit real photos taken by you (not screenshots/memes)
+- Report actual infrastructure problems (roads, lights, utilities)
+- No NSFW, inappropriate, or offensive content
+- No fake, staged, or misleading submissions
+
+PROGRESSIVE ENFORCEMENT POLICY:
+• 1st & 2nd rejection: Warning
+• 3rd rejection: 10 points deducted
+• 4th rejection: 25 points deducted
+• 5th+ rejection: Account suspended
+
+---
+FailState System — Protecting platform integrity
+    """
+    
+    return send_email(to_email, subject, html_content, text_content)
+

@@ -614,7 +614,8 @@ async def build_issue_response(issue_data: dict) -> Issue:
         upvotes=issue_data["upvotes"],
         timeline=timeline,
         verification_status=issue_data.get("verification_status", "pending"),
-        processed_at=issue_data.get("processed_at")
+        processed_at=issue_data.get("processed_at"),
+        rejection_reason=issue_data.get("rejection_reason")
     )
 
 async def build_verified_issue_response(verified_data: dict) -> Issue:

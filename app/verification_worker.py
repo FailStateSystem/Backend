@@ -154,6 +154,100 @@ class VerificationWorker:
             logger.error(traceback.format_exc())
             return None
     
+    async def apply_fake_submission_penalty(self, original_issue: dict, verification: AIVerificationResponse):
+        """
+        Apply penalty for fake submission using database function
+        """
+        try:
+            user_id = original_issue["reported_by"]
+            issue_id = original_issue["id"]
+            
+            # Determine rejection reason
+            rejection_reason = "not_genuine_civic_issue"
+            if verification.is_nsfw:
+                rejection_reason = "nsfw_content_detected"
+            elif verification.is_screenshot:
+                rejection_reason = "screenshot_or_meme_detected"
+            
+            # Call database function to apply penalty
+            result = self.supabase.rpc("apply_fake_submission_penalty", {
+                "p_user_id": user_id,
+                "p_issue_id": issue_id,
+                "p_rejection_reason": rejection_reason,
+                "p_ai_reasoning": verification.reasoning,
+                "p_confidence_score": verification.confidence_score
+            }).execute()
+            
+            if result.data:
+                penalty_info = result.data
+                penalty_applied = penalty_info.get("penalty_applied")
+                points_deducted = penalty_info.get("points_deducted", 0)
+                account_status = penalty_info.get("account_status")
+                message = penalty_info.get("message")
+                
+                logger.info(f"⚠️ Penalty applied to user {user_id}: {penalty_applied}")
+                logger.info(f"   Points deducted: {points_deducted}, Status: {account_status}")
+                logger.info(f"   Message: {message}")
+                
+                # Send email notification about rejection and penalty
+                await self.send_rejection_email(
+                    original_issue,
+                    rejection_reason,
+                    penalty_applied,
+                    points_deducted,
+                    account_status,
+                    message
+                )
+            else:
+                logger.error(f"Failed to apply penalty - no data returned from function")
+            
+        except Exception as e:
+            logger.error(f"Failed to apply fake submission penalty: {e}")
+            logger.error(traceback.format_exc())
+    
+    async def send_rejection_email(
+        self,
+        original_issue: dict,
+        rejection_reason: str,
+        penalty_applied: str,
+        points_deducted: int,
+        account_status: str,
+        message: str
+    ):
+        """
+        Send email notification about issue rejection
+        """
+        try:
+            from app.email_service import send_rejection_notification
+            
+            user_id = original_issue["reported_by"]
+            
+            # Get user email
+            user_result = self.supabase.table("users").select("email, username").eq("id", user_id).execute()
+            
+            if not user_result.data or len(user_result.data) == 0:
+                logger.error(f"User {user_id} not found for rejection email")
+                return
+            
+            user = user_result.data[0]
+            
+            await send_rejection_notification(
+                to_email=user["email"],
+                username=user["username"],
+                issue_description=original_issue.get("description", ""),
+                rejection_reason=rejection_reason,
+                penalty_applied=penalty_applied,
+                points_deducted=points_deducted,
+                account_status=account_status,
+                warning_message=message
+            )
+            
+            logger.info(f"📧 Sent rejection email to {user['email']}")
+            
+        except Exception as e:
+            logger.error(f"Failed to send rejection email: {e}")
+            logger.error(traceback.format_exc())
+    
     async def trigger_post_verification_hooks(self, verified_issue: dict, original_issue: dict):
         """
         Trigger post-verification hooks:
@@ -174,6 +268,12 @@ class VerificationWorker:
             except Exception as e:
                 logger.error(f"Failed to award points: {e}")
             
+            # Send success email notification
+            try:
+                await self.send_verification_success_email(original_issue, verified_issue)
+            except Exception as e:
+                logger.error(f"Failed to send verification success email: {e}")
+            
             # Create timeline event
             try:
                 timeline_event = {
@@ -193,6 +293,40 @@ class VerificationWorker:
             
         except Exception as e:
             logger.error(f"Failed to trigger post-verification hooks: {e}")
+    
+    async def send_verification_success_email(self, original_issue: dict, verified_issue: dict):
+        """
+        Send email notification about successful verification
+        """
+        try:
+            from app.email_service import send_verification_success_notification
+            
+            user_id = original_issue["reported_by"]
+            
+            # Get user email
+            user_result = self.supabase.table("users").select("email, username").eq("id", user_id).execute()
+            
+            if not user_result.data or len(user_result.data) == 0:
+                logger.error(f"User {user_id} not found for success email")
+                return
+            
+            user = user_result.data[0]
+            
+            await send_verification_success_notification(
+                to_email=user["email"],
+                username=user["username"],
+                issue_title=verified_issue.get("generated_title", ""),
+                issue_description=verified_issue.get("generated_description", ""),
+                severity=verified_issue.get("severity", "moderate"),
+                confidence_score=verified_issue.get("ai_confidence_score", 0),
+                points_awarded=25
+            )
+            
+            logger.info(f"📧 Sent verification success email to {user['email']}")
+            
+        except Exception as e:
+            logger.error(f"Failed to send verification success email: {e}")
+            logger.error(traceback.format_exc())
     
     async def process_issue(self, issue: dict) -> bool:
         """
@@ -288,6 +422,10 @@ class VerificationWorker:
                 
                 if rejected_issue:
                     await self.mark_issue_processed(issue_id, "rejected")
+                    
+                    # Apply penalty for fake submission
+                    await self.apply_fake_submission_penalty(issue, verification)
+                    
                     return True
                 else:
                     await self.mark_issue_processed(issue_id, "failed")
