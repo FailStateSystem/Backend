@@ -91,9 +91,9 @@ BACKEND_URL=http://localhost:8000
 # Set to false to disable specific filters if they're too strict or causing issues
 # Default: all true
 
-ENABLE_NSFW_FILTER=true        # Disable if NudeNet has initialization issues
+ENABLE_NSFW_FILTER=false       # Disabled - AI fallback handles NSFW detection (faster)
 ENABLE_DUPLICATE_FILTER=true   # Prevents spam/duplicate images
-ENABLE_OCR_FILTER=true         # Detects screenshots (auto-disabled if Tesseract unavailable)
-ENABLE_GARBAGE_FILTER=true     # Blocks pure black/white/blurry images (disable if too strict)
+ENABLE_OCR_FILTER=false        # Disabled - AI fallback handles screenshot detection (faster)
+ENABLE_GARBAGE_FILTER=true     # Blocks pure black/white/blurry images
 ENABLE_EXIF_CHECK=true         # Extracts image metadata (info only, never blocks)
 

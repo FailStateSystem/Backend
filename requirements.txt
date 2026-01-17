@@ -17,10 +17,10 @@ openai==1.12.0
 httpx==0.26.0
 
 # Pre-ingestion filtering dependencies
-nudenet==2.0.9                    # NSFW detection
+# nudenet==2.0.9                    # NSFW detection (DISABLED - AI fallback handles this, causes startup delays)
 imagehash==4.3.1                  # Duplicate detection (perceptual hashing)
 opencv-python-headless==4.9.0.80  # Garbage image detection (headless for servers)
-pytesseract==0.3.10               # OCR for screenshot/meme detection
+# pytesseract==0.3.10               # OCR for screenshot/meme detection (DISABLED - AI fallback handles this)
 exifread==3.0.0                   # EXIF metadata extraction
 scikit-image==0.22.0              # Additional image processing
 numpy==1.26.3                     # Required for image processing

@@ -170,36 +170,53 @@ class VerificationWorker:
                 rejection_reason = "screenshot_or_meme_detected"
             
             # Call database function to apply penalty
-            result = self.supabase.rpc("apply_fake_submission_penalty", {
-                "p_user_id": user_id,
-                "p_issue_id": issue_id,
-                "p_rejection_reason": rejection_reason,
-                "p_ai_reasoning": verification.reasoning,
-                "p_confidence_score": verification.confidence_score
-            }).execute()
-            
-            if result.data:
-                penalty_info = result.data
-                penalty_applied = penalty_info.get("penalty_applied")
-                points_deducted = penalty_info.get("points_deducted", 0)
-                account_status = penalty_info.get("account_status")
-                message = penalty_info.get("message")
+            try:
+                result = self.supabase.rpc("apply_fake_submission_penalty", {
+                    "p_user_id": user_id,
+                    "p_issue_id": issue_id,
+                    "p_rejection_reason": rejection_reason,
+                    "p_ai_reasoning": verification.reasoning,
+                    "p_confidence_score": verification.confidence_score
+                }).execute()
                 
-                logger.info(f"⚠️ Penalty applied to user {user_id}: {penalty_applied}")
-                logger.info(f"   Points deducted: {points_deducted}, Status: {account_status}")
-                logger.info(f"   Message: {message}")
-                
-                # Send email notification about rejection and penalty
+                # RPC function returns JSON, data will be in result.data
+                if result.data:
+                    # If data is a list, get first element (Supabase RPC returns single value as list)
+                    penalty_info = result.data[0] if isinstance(result.data, list) else result.data
+                    
+                    penalty_applied = penalty_info.get("penalty_applied")
+                    points_deducted = penalty_info.get("points_deducted", 0)
+                    account_status = penalty_info.get("account_status")
+                    message = penalty_info.get("message")
+                    
+                    logger.info(f"⚠️ Penalty applied to user {user_id}: {penalty_applied}")
+                    logger.info(f"   Points deducted: {points_deducted}, Status: {account_status}")
+                    logger.info(f"   Message: {message}")
+                    
+                    # Send email notification about rejection and penalty
+                    await self.send_rejection_email(
+                        original_issue,
+                        rejection_reason,
+                        penalty_applied,
+                        points_deducted,
+                        account_status,
+                        message
+                    )
+                else:
+                    logger.error(f"Failed to apply penalty - no data returned from function")
+                    
+            except Exception as rpc_error:
+                # If RPC call fails, log but don't crash - penalty application is not critical
+                logger.warning(f"RPC call failed (penalty not applied): {rpc_error}")
+                # Still send email with default values
                 await self.send_rejection_email(
                     original_issue,
                     rejection_reason,
-                    penalty_applied,
-                    points_deducted,
-                    account_status,
-                    message
+                    "penalty_error",
+                    0,
+                    "active",
+                    "Unable to apply penalty automatically. Please contact support."
                 )
-            else:
-                logger.error(f"Failed to apply penalty - no data returned from function")
             
         except Exception as e:
             logger.error(f"Failed to apply fake submission penalty: {e}")
