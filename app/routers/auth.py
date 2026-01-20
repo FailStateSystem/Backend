@@ -128,6 +128,13 @@ async def login(login_data: UserLogin):
                 detail="Email not verified. Please check your email for the verification link."
             )
         
+        # Check if account is suspended
+        if user.get("account_status") == "suspended":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your account has been suspended for repeated policy violations. Please contact support if you believe this is an error."
+            )
+        
         # Create access token
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(

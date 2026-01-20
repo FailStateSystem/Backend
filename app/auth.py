@@ -54,7 +54,30 @@ def decode_access_token(token: str) -> TokenData:
         raise credentials_exception
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> TokenData:
-    """Get current authenticated user from token"""
+    """Get current authenticated user from token and verify account status"""
     token = credentials.credentials
-    return decode_access_token(token)
+    token_data = decode_access_token(token)
+    
+    # Check if account is suspended
+    from app.database import get_supabase
+    supabase = get_supabase()
+    
+    try:
+        user_result = supabase.table("users").select("account_status").eq("id", token_data.user_id).execute()
+        
+        if user_result.data and len(user_result.data) > 0:
+            account_status = user_result.data[0].get("account_status")
+            
+            if account_status == "suspended":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Your account has been suspended for repeated policy violations. Please contact support if you believe this is an error."
+                )
+    except HTTPException:
+        raise
+    except Exception:
+        # If check fails, allow request to proceed (don't block legitimate users due to DB issues)
+        pass
+    
+    return token_data
 
