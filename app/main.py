@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import asyncio
 import logging
 from app.config import settings
-from app.routers import auth, users, issues, rewards, uploads
+from app.routers import auth, users, issues, rewards, uploads, districts
 from app.verification_worker import process_verification_queue
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ app.include_router(users.router, prefix="/api/users", tags=["Users"])
 app.include_router(issues.router, prefix="/api/issues", tags=["Issues"])
 app.include_router(rewards.router, prefix="/api/rewards", tags=["Rewards"])
 app.include_router(uploads.router, prefix="/api/uploads", tags=["File Uploads"])
+app.include_router(districts.router, prefix="/api/districts", tags=["Districts & Routing"])
 
 @app.get("/")
 async def root():

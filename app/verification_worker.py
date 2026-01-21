@@ -10,6 +10,7 @@ from typing import Optional
 from app.database import get_supabase
 from app.ai_verification import verify_issue_with_ai, verify_issue_without_ai, AIVerificationResponse
 from app.config import settings
+from app.district_routing import route_verified_issue
 import traceback
 
 logger = logging.getLogger(__name__)
@@ -355,8 +356,37 @@ class VerificationWorker:
             except Exception as e:
                 logger.error(f"Failed to create timeline event: {e}")
             
-            # TODO: Trigger email notifications to authorities
-            # This should be implemented based on location/category
+            # ================================================
+            # DISTRICT ROUTING (Geospatial)
+            # Map verified issue to district and queue DM notification
+            # ================================================
+            try:
+                logger.info(f"🗺️ Starting district routing for issue {verified_issue['id']}")
+                
+                lat = verified_issue.get("location_lat")
+                lng = verified_issue.get("location_lng")
+                severity = verified_issue.get("severity", "moderate")
+                
+                if lat and lng:
+                    routing_success = await asyncio.to_thread(
+                        route_verified_issue,
+                        original_issue["id"],  # Issue from issues table
+                        verified_issue["id"],  # Issue from issues_verified table
+                        float(lat),
+                        float(lng),
+                        severity
+                    )
+                    
+                    if routing_success:
+                        logger.info(f"✅ Successfully routed issue {verified_issue['id']} to district")
+                    else:
+                        logger.warning(f"⚠️ Failed to route issue {verified_issue['id']} to district")
+                else:
+                    logger.warning(f"⚠️ Issue {verified_issue['id']} has no location coordinates - skipping routing")
+                    
+            except Exception as routing_error:
+                logger.error(f"❌ District routing error for issue {verified_issue['id']}: {routing_error}")
+                # Don't fail verification if routing fails - it's non-critical
             
         except Exception as e:
             logger.error(f"Failed to trigger post-verification hooks: {e}")

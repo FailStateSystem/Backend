@@ -99,6 +99,75 @@ class TimelineEvent(BaseModel):
     class Config:
         from_attributes = True
 
+# District Models
+class DistrictBoundary(BaseModel):
+    id: str
+    district_name: str
+    state_name: Optional[str] = None
+    source: str = "geoBoundaries ADM2"
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class DistrictAuthority(BaseModel):
+    id: str
+    district_id: str
+    district_name: Optional[str] = None
+    state_name: Optional[str] = None
+    dm_office_email: Optional[str] = None
+    fallback_email: Optional[str] = None
+    authority_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    office_address: Optional[str] = None
+    last_verified: Optional[datetime] = None
+    confidence_score: Optional[float] = 0.50
+    is_active: bool = True
+    notes: Optional[str] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class DistrictAuthorityCreate(BaseModel):
+    district_id: str
+    dm_office_email: Optional[str] = None
+    fallback_email: Optional[str] = None
+    authority_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    office_address: Optional[str] = None
+    confidence_score: Optional[float] = 0.50
+    notes: Optional[str] = None
+
+class DistrictAuthorityUpdate(BaseModel):
+    dm_office_email: Optional[str] = None
+    fallback_email: Optional[str] = None
+    authority_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    office_address: Optional[str] = None
+    last_verified: Optional[datetime] = None
+    confidence_score: Optional[float] = None
+    is_active: Optional[bool] = None
+    notes: Optional[str] = None
+
+class RoutingLog(BaseModel):
+    id: str
+    issue_id: Optional[str] = None
+    latitude: float
+    longitude: float
+    district_id: Optional[str] = None
+    district_name: Optional[str] = None
+    state_name: Optional[str] = None
+    routing_method: str  # 'point_in_polygon' or 'fallback_nearest'
+    fallback_used: bool = False
+    fallback_distance_km: Optional[float] = None
+    confidence_score: Optional[float] = None
+    processing_time_ms: Optional[int] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
 # Issue Models
 class IssueBase(BaseModel):
     title: str
@@ -133,6 +202,12 @@ class Issue(IssueBase):
     verification_status: Optional[str] = "pending"  # AI verification status
     processed_at: Optional[datetime] = None  # When AI verification completed
     rejection_reason: Optional[str] = None  # Reason for rejection (if rejected)
+    # District routing fields
+    district_id: Optional[str] = None
+    district_name: Optional[str] = None
+    state_name: Optional[str] = None
+    routing_status: Optional[str] = "pending"
+    routing_method: Optional[str] = None
 
     class Config:
         from_attributes = True
