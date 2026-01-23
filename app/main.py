@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import asyncio
 import logging
 from app.config import settings
-from app.routers import auth, users, issues, rewards, uploads, districts
+from app.routers import auth, users, issues, rewards, uploads, districts, admin
 from app.verification_worker import process_verification_queue
 
 logger = logging.getLogger(__name__)
@@ -42,13 +42,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
-app.include_router(users.router, prefix="/api/users", tags=["Users"])
-app.include_router(issues.router, prefix="/api/issues", tags=["Issues"])
-app.include_router(rewards.router, prefix="/api/rewards", tags=["Rewards"])
-app.include_router(uploads.router, prefix="/api/uploads", tags=["File Uploads"])
-app.include_router(districts.router, prefix="/api/districts", tags=["Districts & Routing"])
+# Include public routers (accessible to all authenticated users)
+app.include_router(auth.router, prefix="/public/auth", tags=["Public - Authentication"])
+app.include_router(users.router, prefix="/public/users", tags=["Public - Users"])
+app.include_router(issues.router, prefix="/public/issues", tags=["Public - Issues"])
+app.include_router(rewards.router, prefix="/public/rewards", tags=["Public - Rewards"])
+app.include_router(uploads.router, prefix="/public/uploads", tags=["Public - File Uploads"])
+app.include_router(districts.router, prefix="/public/districts", tags=["Public - Districts"])
+
+# Include admin routers (TODO: Add admin role checking)
+app.include_router(admin.router, prefix="/admin", tags=["Admin Console"])
 
 @app.get("/")
 async def root():
