@@ -3,16 +3,23 @@ Admin Console API
 ==================
 Comprehensive admin endpoints for monitoring, management, and control
 
-All endpoints require authentication (JWT)
-TODO: Add admin role checking for production security
+All endpoints require admin authentication
+All actions are logged for audit trail
 """
 
-from fastapi import APIRouter, HTTPException, status, Depends, Query
+from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
-from app.models import TokenData
-from app.auth import get_current_user
 from app.database import get_supabase
+from app.admin_auth import (
+    get_current_admin,
+    AdminTokenData,
+    AdminLoginRequest,
+    authenticate_admin,
+    create_admin_access_token,
+    log_admin_action,
+    require_super_admin
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -21,12 +28,113 @@ router = APIRouter()
 
 
 # ============================================
+# ADMIN AUTHENTICATION
+# ============================================
+
+@router.post("/login")
+async def admin_login(request: Request, login_data: AdminLoginRequest):
+    """
+    Admin login endpoint
+    
+    Separate from user login - uses admins table
+    Returns admin JWT token
+    """
+    try:
+        admin = await authenticate_admin(login_data.email, login_data.password)
+        
+        if not admin:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # Create admin token
+        access_token = create_admin_access_token(
+            data={
+                "sub": admin["id"],
+                "email": admin["email"],
+                "username": admin["username"],
+                "is_super_admin": admin["is_super_admin"]
+            }
+        )
+        
+        # Log login action
+        admin_token = AdminTokenData(
+            admin_id=admin["id"],
+            email=admin["email"],
+            username=admin["username"],
+            is_super_admin=admin["is_super_admin"]
+        )
+        
+        await log_admin_action(
+            admin=admin_token,
+            action_type="admin_login",
+            resource_type="auth",
+            details={"login_method": "password"},
+            request=request
+        )
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "admin": {
+                "id": admin["id"],
+                "email": admin["email"],
+                "username": admin["username"],
+                "full_name": admin.get("full_name"),
+                "is_super_admin": admin["is_super_admin"]
+            }
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Admin login error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Login failed"
+        )
+
+
+@router.get("/me")
+async def get_admin_profile(admin: AdminTokenData = Depends(get_current_admin)):
+    """Get current admin profile"""
+    try:
+        from app.admin_auth import get_admin_by_id, get_admin_activity_summary
+        
+        admin_data = await get_admin_by_id(admin.admin_id)
+        activity = await get_admin_activity_summary(admin.admin_id)
+        
+        if not admin_data:
+            raise HTTPException(status_code=404, detail="Admin not found")
+        
+        return {
+            "id": admin_data["id"],
+            "email": admin_data["email"],
+            "username": admin_data["username"],
+            "full_name": admin_data.get("full_name"),
+            "is_super_admin": admin_data["is_super_admin"],
+            "last_login_at": admin_data.get("last_login_at"),
+            "created_at": admin_data["created_at"],
+            "activity": activity
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get admin profile: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
 # DASHBOARD & OVERVIEW
 # ============================================
 
 @router.get("/dashboard")
 async def get_admin_dashboard(
-    current_user: TokenData = Depends(get_current_user)
+    request: Request,
+    admin: AdminTokenData = Depends(get_current_admin)
 ) -> Dict[str, Any]:
     """
     Admin Dashboard - High-level overview of entire system
@@ -122,11 +230,12 @@ async def get_admin_dashboard(
 
 @router.get("/users")
 async def list_users(
+    request: Request,
     status: Optional[str] = Query(None, description="Filter by account_status"),
     search: Optional[str] = Query(None, description="Search by email or username"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ) -> Dict[str, Any]:
     """
     List all users with filtering and pagination
@@ -166,7 +275,8 @@ async def list_users(
 @router.get("/users/{user_id}")
 async def get_user_details(
     user_id: str,
-    current_user: TokenData = Depends(get_current_user)
+    request: Request,
+    admin: AdminTokenData = Depends(get_current_admin)
 ) -> Dict[str, Any]:
     """
     Get detailed user information including activity and violations
@@ -220,14 +330,22 @@ async def get_user_details(
 @router.patch("/users/{user_id}/unsuspend")
 async def unsuspend_user(
     user_id: str,
+    request: Request,
     reset_penalties: bool = Query(False, description="Also reset penalty count"),
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     Unsuspend/unblock a user account
     """
     try:
         supabase = get_supabase()
+        
+        # Get user info before update
+        user_result = supabase.table("users").select("email, username").eq("id", user_id).limit(1).execute()
+        if not user_result.data:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_info = user_result.data[0]
         
         update_data = {
             "account_status": "active",
@@ -237,16 +355,26 @@ async def unsuspend_user(
         
         result = supabase.table("users").update(update_data).eq("id", user_id).execute()
         
-        if not result.data:
-            raise HTTPException(status_code=404, detail="User not found")
-        
         # Optionally reset penalty count
         if reset_penalties:
             supabase.table("user_penalties").update({
                 "rejection_count": 0
             }).eq("user_id", user_id).execute()
         
-        logger.info(f"✅ Admin {current_user.user_id} unsuspended user {user_id}")
+        # Log action
+        await log_admin_action(
+            admin=admin,
+            action_type="user_unsuspended",
+            resource_type="user",
+            resource_id=user_id,
+            details={
+                "user_email": user_info["email"],
+                "penalties_reset": reset_penalties
+            },
+            request=request
+        )
+        
+        logger.info(f"✅ Admin {admin.email} unsuspended user {user_id}")
         
         return {
             "message": "User unsuspended successfully",
@@ -264,15 +392,23 @@ async def unsuspend_user(
 @router.patch("/users/{user_id}/suspend")
 async def suspend_user(
     user_id: str,
+    request: Request,
     reason: str = Query(..., description="Reason for suspension"),
     permanent: bool = Query(False, description="Permanent suspension"),
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     Suspend a user account
     """
     try:
         supabase = get_supabase()
+        
+        # Get user info
+        user_result = supabase.table("users").select("email, username").eq("id", user_id).limit(1).execute()
+        if not user_result.data:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_info = user_result.data[0]
         
         update_data = {
             "account_status": "suspended",
@@ -284,10 +420,21 @@ async def suspend_user(
         
         result = supabase.table("users").update(update_data).eq("id", user_id).execute()
         
-        if not result.data:
-            raise HTTPException(status_code=404, detail="User not found")
+        # Log action
+        await log_admin_action(
+            admin=admin,
+            action_type="user_suspended",
+            resource_type="user",
+            resource_id=user_id,
+            details={
+                "user_email": user_info["email"],
+                "reason": reason,
+                "permanent": permanent
+            },
+            request=request
+        )
         
-        logger.warning(f"🚫 Admin {current_user.user_id} suspended user {user_id}: {reason}")
+        logger.warning(f"🚫 Admin {admin.email} suspended user {user_id}: {reason}")
         
         return {
             "message": f"User suspended {'permanently' if permanent else 'for 30 days'}",
@@ -305,8 +452,9 @@ async def suspend_user(
 @router.delete("/users/{user_id}")
 async def delete_user(
     user_id: str,
+    request: Request,
     reason: str = Query(..., description="Reason for deletion"),
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     Permanently delete a user account
@@ -329,7 +477,21 @@ async def delete_user(
         # Delete user (CASCADE will handle related tables)
         result = supabase.table("users").delete().eq("id", user_id).execute()
         
-        logger.critical(f"🗑️ Admin {current_user.user_id} DELETED user {user_id} ({user_info['email']}): {reason}")
+        # Log action
+        await log_admin_action(
+            admin=admin,
+            action_type="user_deleted",
+            resource_type="user",
+            resource_id=user_id,
+            details={
+                "user_email": user_info["email"],
+                "user_username": user_info["username"],
+                "reason": reason
+            },
+            request=request
+        )
+        
+        logger.critical(f"🗑️ Admin {admin.email} DELETED user {user_id} ({user_info['email']}): {reason}")
         
         return {
             "message": "User permanently deleted",
@@ -352,7 +514,7 @@ async def update_user_trust_score(
     user_id: str,
     new_score: int = Query(..., ge=0, le=100, description="New trust score (0-100)"),
     reason: str = Query(..., description="Reason for change"),
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     Manually update a user's trust score
@@ -367,7 +529,7 @@ async def update_user_trust_score(
         if not result.data:
             raise HTTPException(status_code=404, detail="User not found")
         
-        logger.info(f"📝 Admin {current_user.user_id} set trust score for {user_id} to {new_score}: {reason}")
+        logger.info(f"📝 Admin {admin.admin_id} set trust score for {user_id} to {new_score}: {reason}")
         
         return {
             "message": "Trust score updated",
@@ -387,7 +549,7 @@ async def update_user_trust_score(
 async def reset_user_penalties(
     user_id: str,
     reason: str = Query(..., description="Reason for reset"),
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     Reset user penalties (forgive past violations)
@@ -405,7 +567,7 @@ async def reset_user_penalties(
             "trust_score": 80  # Default trust score
         }).eq("id", user_id).execute()
         
-        logger.info(f"🔄 Admin {current_user.user_id} reset penalties for user {user_id}: {reason}")
+        logger.info(f"🔄 Admin {admin.admin_id} reset penalties for user {user_id}: {reason}")
         
         return {
             "message": "User penalties reset successfully",
@@ -426,7 +588,7 @@ async def reset_user_penalties(
 async def list_pending_issues(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     List all pending issues (awaiting AI verification)
@@ -465,7 +627,7 @@ async def list_rejected_issues(
     reason: Optional[str] = Query(None, description="Filter by rejection reason"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     List all rejected issues with rejection reasons
@@ -519,7 +681,7 @@ async def list_verified_issues(
     district_id: Optional[str] = Query(None, description="Filter by district"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     List all verified issues with AI analysis
@@ -556,9 +718,10 @@ async def list_verified_issues(
 @router.post("/issues/{issue_id}/approve")
 async def approve_pending_issue(
     issue_id: str,
+    request: Request,
     reason: str = Query(..., description="Reason for manual approval"),
     severity: str = Query("moderate", description="Severity level"),
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     Manually approve a pending issue (bypass AI verification)
@@ -622,7 +785,21 @@ async def approve_pending_issue(
         except Exception as e:
             logger.error(f"Failed to award points: {e}")
         
-        logger.warning(f"✅ Admin {current_user.user_id} manually approved issue {issue_id}: {reason}")
+        # Log action
+        await log_admin_action(
+            admin=admin,
+            action_type="issue_approved_pending",
+            resource_type="issue",
+            resource_id=issue_id,
+            details={
+                "reason": reason,
+                "severity": severity,
+                "issue_title": issue["title"]
+            },
+            request=request
+        )
+        
+        logger.warning(f"✅ Admin {admin.email} manually approved issue {issue_id}: {reason}")
         
         return {
             "message": "Issue manually approved and published",
@@ -640,9 +817,10 @@ async def approve_pending_issue(
 @router.post("/issues/{issue_id}/approve-rejected")
 async def approve_rejected_issue(
     issue_id: str,
+    request: Request,
     reason: str = Query(..., description="Reason for overriding rejection"),
     severity: str = Query("moderate", description="Severity level"),
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     Approve a rejected issue (override AI decision - false negative fix)
@@ -710,7 +888,22 @@ async def approve_rejected_issue(
         except Exception as e:
             logger.error(f"Failed to award points: {e}")
         
-        logger.warning(f"🔄 Admin {current_user.user_id} overrode rejection for issue {issue_id}: {reason}")
+        # Log action
+        await log_admin_action(
+            admin=admin,
+            action_type="issue_approved_rejected",
+            resource_type="issue",
+            resource_id=issue_id,
+            details={
+                "reason": reason,
+                "severity": severity,
+                "issue_title": issue["title"],
+                "original_rejection_reason": issue.get("rejection_reason")
+            },
+            request=request
+        )
+        
+        logger.warning(f"🔄 Admin {admin.email} overrode rejection for issue {issue_id}: {reason}")
         
         return {
             "message": "Rejected issue approved and published (AI override)",
@@ -730,7 +923,7 @@ async def approve_rejected_issue(
 async def delete_issue(
     issue_id: str,
     reason: str = Query(..., description="Reason for deletion"),
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     Delete an issue permanently
@@ -753,7 +946,7 @@ async def delete_issue(
         # Delete from main table (CASCADE handles related tables)
         result = supabase.table("issues").delete().eq("id", issue_id).execute()
         
-        logger.critical(f"🗑️ Admin {current_user.user_id} DELETED issue {issue_id} ({issue_info['title']}): {reason}")
+        logger.critical(f"🗑️ Admin {admin.admin_id} DELETED issue {issue_id} ({issue_info['title']}): {reason}")
         
         return {
             "message": "Issue permanently deleted",
@@ -773,7 +966,7 @@ async def delete_issue(
 @router.post("/issues/{issue_id}/process")
 async def manually_process_issue(
     issue_id: str,
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     Manually trigger AI verification for a pending issue
@@ -789,7 +982,7 @@ async def manually_process_issue(
         # Trigger verification
         asyncio.create_task(verify_issue_async(issue_id))
         
-        logger.info(f"🔄 Admin {current_user.user_id} triggered verification for issue {issue_id}")
+        logger.info(f"🔄 Admin {admin.admin_id} triggered verification for issue {issue_id}")
         
         return {
             "message": "Verification queued for processing",
@@ -812,7 +1005,7 @@ async def get_recent_abuse(
     violation_type: Optional[str] = Query(None, description="Filter by type"),
     hours: int = Query(24, ge=1, le=168, description="Look back hours"),
     limit: int = Query(100, ge=1, le=500),
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     View recent abuse attempts and violations
@@ -847,7 +1040,7 @@ async def get_recent_abuse(
 
 @router.get("/system/health")
 async def get_system_health(
-    current_user: TokenData = Depends(get_current_user)
+    admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     System health check with component status
