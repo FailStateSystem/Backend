@@ -67,19 +67,9 @@ class AdminActionLog(BaseModel):
 def verify_admin_password(plain_password: str, hashed_password: str) -> bool:
     """Verify admin password"""
     try:
-        logger.info(f"DEBUG: Verifying password")
-        logger.info(f"DEBUG: Plain password length: {len(plain_password)}")
-        logger.info(f"DEBUG: Hash: {hashed_password[:30]}...")
-        logger.info(f"DEBUG: Hash length: {len(hashed_password)}")
-        
-        result = pwd_context.verify(plain_password, hashed_password)
-        logger.info(f"DEBUG: Verification result: {result}")
-        return result
+        return pwd_context.verify(plain_password, hashed_password)
     except Exception as e:
-        logger.error(f"DEBUG: Password verification failed with exception: {str(e)}")
-        logger.error(f"DEBUG: Exception type: {type(e).__name__}")
-        import traceback
-        logger.error(f"DEBUG: Traceback: {traceback.format_exc()}")
+        logger.error(f"Password verification error: {str(e)}")
         return False
 
 
