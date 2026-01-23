@@ -1,196 +1,307 @@
-# FailState Backend API
+# FailState Backend
 
-A FastAPI-based backend for the FailState civic issue reporting application.
+**A civic tech platform empowering citizens to report and track infrastructure issues with AI-powered verification.**
 
-## Features
+## 🚀 Overview
 
-- **User Authentication**: JWT-based authentication with signup and login
-- **Issue Reporting**: Create, read, update issues with location tracking
-- **File Uploads**: Image and video uploads to Supabase Storage with automatic optimization
-- **Rewards System**: Gamification with points, milestones, and redeemable items
-- **Timeline Tracking**: Track issue status changes and updates
-- **Upvoting System**: Community engagement through upvotes
-- **User Profiles**: Track credibility scores, badges, and statistics
+FailState is a comprehensive backend system that enables citizens to report infrastructure problems, automatically verifies submissions using AI, and routes verified issues to relevant authorities. The platform includes sophisticated abuse prevention, trust scoring, and administrative controls.
 
-## Tech Stack
+## ✨ Key Features
 
-- **FastAPI**: Modern Python web framework
-- **Supabase**: PostgreSQL database + Storage for files
-- **JWT**: Secure authentication
-- **Pydantic**: Data validation
-- **Pillow**: Image processing and optimization
-- **Python 3.10+**
+### Core Functionality
+- 🔐 **User Authentication** - JWT-based auth with email verification
+- 📸 **Issue Reporting** - Image upload with geolocation
+- 🤖 **AI Verification** - GPT-4o Vision-powered issue validation
+- 🗺️ **Geospatial Routing** - Automatic assignment to administrative districts
+- 🏆 **Rewards System** - Points and badges for quality contributions
+- 👮 **Admin Console** - Comprehensive system management and monitoring
 
-## Setup
+### Security & Abuse Prevention
+- 🛡️ **Pre-ingestion Filtering** - NSFW detection, duplicate detection, garbage image filtering
+- 🔍 **Trust Scoring** - Dynamic user reputation system
+- 📊 **Rate Limiting** - User and IP-based throttling
+- 🚫 **Progressive Penalties** - Automated account warnings and suspensions
+- 👻 **Shadow Banning** - Silent rejection for repeat offenders
+- 📝 **Audit Logging** - Complete admin action history
 
-### 1. Install Dependencies
+## 🏗️ Architecture
 
+```
+┌─────────────────┐
+│   Client App    │
+└────────┬────────┘
+         │
+    ┌────▼────┐
+    │ FastAPI │
+    └────┬────┘
+         │
+    ┌────▼─────────────────────────┐
+    │  Core Services               │
+    ├──────────────────────────────┤
+    │ • Authentication             │
+    │ • Pre-ingestion Filter       │
+    │ • AI Verification Worker     │
+    │ • District Routing           │
+    │ • Trust System               │
+    │ • Rate Limiter               │
+    └────┬─────────────────────────┘
+         │
+    ┌────▼────────────────────┐
+    │   Supabase              │
+    ├─────────────────────────┤
+    │ • PostgreSQL + PostGIS  │
+    │ • Storage (Images)      │
+    │ • Row Level Security    │
+    └─────────────────────────┘
+```
+
+## 📦 Tech Stack
+
+- **Framework:** FastAPI (Python 3.9+)
+- **Database:** PostgreSQL with PostGIS extension (via Supabase)
+- **Storage:** Supabase Storage
+- **AI:** OpenAI GPT-4o with Vision
+- **Authentication:** JWT tokens with bcrypt password hashing
+- **Image Processing:** OpenCV, NudeNet, ImageHash, Tesseract OCR
+- **Email:** Resend API
+- **Deployment:** Render (Docker)
+
+## 🛠️ Setup
+
+### Prerequisites
+
+- Python 3.9+
+- PostgreSQL with PostGIS
+- Supabase account
+- OpenAI API key
+- Resend API key (for emails)
+
+### Environment Variables
+
+Create a `.env` file in the root directory:
+
+```env
+# Supabase
+SUPABASE_URL=your_supabase_url
+SUPABASE_SERVICE_KEY=your_service_key
+SUPABASE_ANON_KEY=your_anon_key
+
+# JWT
+JWT_SECRET_KEY=your_jwt_secret
+JWT_ALGORITHM=HS256
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=43200
+
+# OpenAI
+OPENAI_API_KEY=your_openai_key
+
+# Email
+RESEND_API_KEY=your_resend_key
+FROM_EMAIL=noreply@yourdomain.com
+
+# Frontend
+FRONTEND_URL=https://yourdomain.com
+```
+
+### Installation
+
+1. **Clone the repository:**
 ```bash
+git clone <repository-url>
 cd failstate-backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+2. **Install dependencies:**
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment Variables
+3. **Set up the database:**
+   - Run SQL files from `sql/schema/` in order:
+     - `enable_postgis.sql`
+     - `complete_schema.sql`
+     - `ai_verification_tables.sql`
+     - `district_routing_tables.sql`
+     - `filtering_tables.sql`
+   - Set up admin system: `sql/admin/setup_admin_system.sql`
 
-Copy `.env.example` to `.env` and fill in your Supabase credentials:
-
+4. **Run the application:**
 ```bash
-cp .env.example .env
+# Development
+uvicorn app.main:app --reload --port 8000
+
+# Production
+gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker
 ```
 
-Update the following in `.env`:
-- `SUPABASE_URL`: Your Supabase project URL
-- `SUPABASE_KEY`: Your Supabase anon key
-- `SUPABASE_SERVICE_KEY`: Your Supabase service role key
-- `DATABASE_URL`: Your PostgreSQL connection string
-- `SECRET_KEY`: Generate with `openssl rand -hex 32`
+## 📚 API Documentation
 
-### 3. Set Up Database
+### Base URLs
 
-Run the SQL queries provided in `database_schema.sql` on your Supabase SQL console to create all necessary tables and functions.
+- **Public API:** `/public/*` - Accessible to authenticated users
+- **Admin API:** `/admin/*` - Requires admin authentication
 
-### 4. Set Up Storage (Optional but Recommended)
+### Key Endpoints
 
-Create storage buckets in Supabase for image and video uploads:
-1. Go to Supabase Dashboard → Storage
-2. Create bucket: `issue-images` (Public)
-3. Create bucket: `issue-videos` (Public)
+#### Public API
+- `POST /public/auth/signup` - Register new user
+- `POST /public/auth/login` - User login
+- `GET /public/auth/verify-email` - Verify email address
+- `POST /public/issues` - Submit new issue
+- `GET /public/issues` - Get issue feed
+- `GET /public/users/me` - Get current user profile
+- `GET /public/rewards/leaderboard` - Get top contributors
 
-See `SUPABASE_STORAGE_SETUP.md` for detailed instructions.
+#### Admin API
+- `POST /admin/login` - Admin authentication
+- `GET /admin/dashboard` - System overview stats
+- `GET /admin/users` - List all users
+- `PATCH /admin/users/{id}/unsuspend` - Unsuspend user
+- `DELETE /admin/users/{id}` - Delete user
+- `POST /admin/issues/{id}/approve` - Manually approve issue
+- `POST /admin/issues/{id}/reject` - Manually reject issue
+- `DELETE /admin/issues/{id}` - Delete issue
+- `GET /admin/activity/recent` - Recent admin actions
 
-### 5. Run the Server
+**Full API documentation:** Visit `/docs` (Swagger UI) or `/redoc` after starting the server
 
-```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
+## 🔐 Admin System
 
-The API will be available at `http://localhost:8000`
+### Default Admin Credentials
 
-## API Documentation
+**⚠️ Change these immediately after deployment!**
 
-Once the server is running, visit:
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
+- **Email:** `admin@failstate.in`
+- **Password:** `FailState@2026!Secure#Admin`
 
-## API Endpoints
+### Admin Features
 
-### Authentication
-- `POST /api/auth/signup` - Register a new user
-- `POST /api/auth/login` - Login and get access token
+- Dashboard with real-time system stats
+- User management (suspend, unsuspend, delete)
+- Issue moderation (approve, reject, delete)
+- Abuse monitoring and filtering controls
+- Complete audit trail of all admin actions
+- Super admin role support
 
-### Users
-- `GET /api/users/me` - Get current user profile
-- `GET /api/users/{user_id}` - Get user by ID
-- `GET /api/users/me/badges` - Get user's badges
-
-### Issues
-- `POST /api/issues` - Create a new issue
-- `GET /api/issues` - Get all issues (with filters)
-- `GET /api/issues/{issue_id}` - Get specific issue
-- `PATCH /api/issues/{issue_id}` - Update an issue
-- `POST /api/issues/{issue_id}/upvote` - Upvote an issue
-- `DELETE /api/issues/{issue_id}/upvote` - Remove upvote
-
-### Rewards
-- `GET /api/rewards/summary` - Get rewards summary
-- `GET /api/rewards/milestones` - Get all milestones
-- `POST /api/rewards/milestones/{milestone_id}/claim` - Claim a milestone
-- `GET /api/rewards/items` - Get redeemable items
-- `POST /api/rewards/items/{item_id}/redeem` - Redeem an item
-- `GET /api/rewards/claimed` - Get claimed items
-- `GET /api/rewards/history` - Get rewards history
-
-### File Uploads
-- `POST /api/uploads/image` - Upload an image (max 5MB)
-- `POST /api/uploads/video` - Upload a video (max 50MB)
-- `DELETE /api/uploads/file` - Delete a file from storage
-
-## Project Structure
+## 🗂️ Project Structure
 
 ```
 failstate-backend/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py           # FastAPI app initialization
-│   ├── config.py         # Configuration and settings
-│   ├── database.py       # Supabase client
-│   ├── models.py         # Pydantic models
-│   ├── auth.py           # Authentication utilities
-│   ├── storage.py        # File upload service (Supabase Storage)
+│   ├── main.py                    # FastAPI app entry point
+│   ├── config.py                  # Configuration management
+│   ├── database.py                # Supabase client
+│   ├── models.py                  # Pydantic models
+│   ├── auth.py                    # User authentication
+│   ├── admin_auth.py              # Admin authentication
+│   ├── storage.py                 # File upload handling
+│   ├── email_service.py           # Email notifications
+│   ├── rate_limiter.py            # Rate limiting
+│   ├── trust_system.py            # User reputation
+│   ├── content_filters.py         # Basic content validation
+│   ├── pre_ingestion_filter.py    # Advanced pre-filtering
+│   ├── ai_verification.py         # AI-powered verification
+│   ├── verification_worker.py     # Background processing
+│   ├── district_routing.py        # Geospatial assignment
 │   └── routers/
-│       ├── __init__.py
-│       ├── auth.py       # Auth endpoints
-│       ├── users.py      # User endpoints
-│       ├── issues.py     # Issue endpoints
-│       ├── rewards.py    # Rewards endpoints
-│       └── uploads.py    # File upload endpoints
-├── requirements.txt
-├── database_schema.sql
-├── .env.example
-├── .gitignore
-├── README.md
-├── QUICK_START.md
-├── SUPABASE_SETUP.md
-└── SUPABASE_STORAGE_SETUP.md
+│       ├── auth.py                # Auth endpoints
+│       ├── users.py               # User endpoints
+│       ├── issues.py              # Issue endpoints
+│       ├── rewards.py             # Rewards endpoints
+│       ├── uploads.py             # File upload endpoints
+│       ├── districts.py           # District endpoints
+│       └── admin.py               # Admin endpoints
+├── sql/
+│   ├── schema/                    # Database schemas
+│   ├── migrations/                # Schema migrations
+│   └── admin/                     # Admin system SQL
+├── requirements.txt               # Python dependencies
+├── Dockerfile                     # Docker configuration
+├── docker-compose.yml             # Local development setup
+├── render-build.sh                # Render deployment script
+└── README.md                      # This file
 ```
 
-## Development
+## 🚢 Deployment
 
-### Running Tests
+### Render (Recommended)
+
+1. Connect your GitHub repository to Render
+2. Configure environment variables in Render dashboard
+3. Build command: `./render-build.sh`
+4. Start command: `gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT`
+
+### Docker
 
 ```bash
-pytest
+# Build image
+docker build -t failstate-backend .
+
+# Run container
+docker run -p 8000:8000 --env-file .env failstate-backend
 ```
 
-### Code Formatting
+### Docker Compose (Local Development)
 
 ```bash
-black app/
+docker-compose up
 ```
 
-### Type Checking
+## 🧪 Testing
 
-```bash
-mypy app/
-```
+The platform includes comprehensive validation and error handling:
 
-## Deployment
+- Input validation via Pydantic models
+- Database constraints and triggers
+- Rate limiting and abuse detection
+- Image content filtering
+- AI verification with confidence scoring
 
-### Docker Deployment
+## 📊 Monitoring
 
-```dockerfile
-FROM python:3.11-slim
+Key metrics tracked:
+- User signups and active users
+- Issue submission rates
+- Verification success/rejection rates
+- Filter effectiveness (NSFW, duplicates, garbage)
+- Admin actions and audit logs
+- Trust score distribution
 
-WORKDIR /app
+## 🔒 Security Features
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+- **Password Security:** Bcrypt hashing with salt rounds
+- **JWT Tokens:** Signed with secret key, short expiration
+- **Email Verification:** Required for account activation
+- **Row Level Security:** Database-level access control
+- **Rate Limiting:** Per-user and per-IP throttling
+- **Content Filtering:** Multi-layer abuse prevention
+- **Audit Logging:** Complete admin action history
+- **Shadow Banning:** Silent rejection for repeat offenders
 
-COPY . .
+## 🤝 Contributing
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
+This is a closed-source project. For bug reports or feature requests, contact the development team.
 
-### Environment Variables for Production
+## 📄 License
 
-Make sure to set:
-- `ENVIRONMENT=production`
-- `DEBUG=False`
-- Strong `SECRET_KEY`
-- Proper `CORS_ORIGINS`
+Proprietary - All rights reserved
 
-## Security Considerations
+## 🆘 Support
 
-- Always use HTTPS in production
-- Keep `SECRET_KEY` secure and never commit it
-- Use strong passwords
-- Implement rate limiting for API endpoints
-- Validate and sanitize all user inputs
-- Use environment variables for sensitive data
+For technical support or questions:
+- **Email:** admin@failstate.in
+- **Documentation:** Check `/docs` endpoint for API reference
 
-## License
+## 🎯 Roadmap
 
-MIT License
+- [ ] Mobile app integration
+- [ ] Real-time notifications
+- [ ] Authority dashboard for issue resolution
+- [ ] Analytics and reporting tools
+- [ ] Multi-language support
+- [ ] Automated issue status updates
+- [ ] Public API for third-party integrations
 
+---
+
+**Built with ❤️ for civic engagement**
