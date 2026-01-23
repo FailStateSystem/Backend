@@ -248,7 +248,8 @@ async def list_users(
             "account_status, trust_score, is_shadow_banned, created_at, updated_at"
         )
         
-        if status:
+        # Only filter by status if it's not "all"
+        if status and status != "all":
             query = query.eq("account_status", status)
         
         if search:
@@ -586,19 +587,31 @@ async def reset_user_penalties(
 
 @router.get("/issues/pending")
 async def list_pending_issues(
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
+    page: Optional[int] = Query(None, ge=1, description="Page number (starts at 1)"),
+    page_size: Optional[int] = Query(None, ge=1, le=500, description="Items per page"),
+    limit: int = Query(100, ge=1, le=500, description="Max items to return"),
+    offset: int = Query(0, ge=0, description="Number of items to skip"),
     admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
     List all pending issues (awaiting AI verification)
+    
+    Supports two pagination styles:
+    - page/page_size: page=1&page_size=20
+    - limit/offset: limit=20&offset=0
     """
     try:
         supabase = get_supabase()
         
+        # Convert page/page_size to limit/offset if provided
+        if page is not None and page_size is not None:
+            limit = page_size
+            offset = (page - 1) * page_size
+        
         result = supabase.table("issues").select(
             "id, title, description, category, location_name, location_lat, location_lng, "
-            "image_url, reported_by, reported_at, verification_status, retry_count"
+            "image_url, reported_by, reported_at, verification_status, retry_count",
+            count="exact"
         ).eq("verification_status", "pending").range(
             offset, offset + limit - 1
         ).order("reported_at", desc=True).execute()
@@ -614,7 +627,9 @@ async def list_pending_issues(
         
         return {
             "issues": result.data if result.data else [],
-            "total": result.count if hasattr(result, 'count') else len(result.data or [])
+            "total": result.count or 0,
+            "limit": limit,
+            "offset": offset
         }
     
     except Exception as e:
@@ -624,6 +639,8 @@ async def list_pending_issues(
 
 @router.get("/issues/rejected")
 async def list_rejected_issues(
+    page: Optional[int] = Query(None, ge=1, description="Page number (starts at 1)"),
+    page_size: Optional[int] = Query(None, ge=1, le=500, description="Items per page"),
     reason: Optional[str] = Query(None, description="Filter by rejection reason"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -631,13 +648,23 @@ async def list_rejected_issues(
 ):
     """
     List all rejected issues with rejection reasons
+    
+    Supports two pagination styles:
+    - page/page_size: page=1&page_size=20
+    - limit/offset: limit=20&offset=0
     """
     try:
         supabase = get_supabase()
         
+        # Convert page/page_size to limit/offset if provided
+        if page is not None and page_size is not None:
+            limit = page_size
+            offset = (page - 1) * page_size
+        
         query = supabase.table("issues").select(
             "id, title, description, category, image_url, reported_by, reported_at, "
-            "verification_status, rejection_reason, processed_at, rejection_count"
+            "verification_status, rejection_reason, processed_at, rejection_count",
+            count="exact"
         ).eq("verification_status", "rejected")
         
         if reason:
@@ -667,7 +694,9 @@ async def list_rejected_issues(
         
         return {
             "issues": result.data if result.data else [],
-            "total": result.count if hasattr(result, 'count') else len(result.data or [])
+            "total": result.count or 0,
+            "limit": limit,
+            "offset": offset
         }
     
     except Exception as e:
@@ -677,6 +706,8 @@ async def list_rejected_issues(
 
 @router.get("/issues/verified")
 async def list_verified_issues(
+    page: Optional[int] = Query(None, ge=1, description="Page number (starts at 1)"),
+    page_size: Optional[int] = Query(None, ge=1, le=500, description="Items per page"),
     severity: Optional[str] = Query(None, description="Filter by severity"),
     district_id: Optional[str] = Query(None, description="Filter by district"),
     limit: int = Query(100, ge=1, le=500),
@@ -685,14 +716,24 @@ async def list_verified_issues(
 ):
     """
     List all verified issues with AI analysis
+    
+    Supports two pagination styles:
+    - page/page_size: page=1&page_size=20
+    - limit/offset: limit=20&offset=0
     """
     try:
         supabase = get_supabase()
         
+        # Convert page/page_size to limit/offset if provided
+        if page is not None and page_size is not None:
+            limit = page_size
+            offset = (page - 1) * page_size
+        
         query = supabase.table("issues_verified").select(
             "id, original_issue_id, generated_title, generated_description, "
             "severity, ai_confidence_score, district_id, district_name, state_name, "
-            "routing_status, dm_notification_sent, verified_at, reported_by"
+            "routing_status, dm_notification_sent, verified_at, reported_by",
+            count="exact"
         )
         
         if severity:
@@ -707,7 +748,9 @@ async def list_verified_issues(
         
         return {
             "issues": result.data if result.data else [],
-            "total": result.count if hasattr(result, 'count') else len(result.data or [])
+            "total": result.count or 0,
+            "limit": limit,
+            "offset": offset
         }
     
     except Exception as e:
