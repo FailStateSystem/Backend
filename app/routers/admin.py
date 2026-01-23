@@ -225,6 +225,190 @@ async def get_admin_dashboard(
 
 
 # ============================================
+# ANALYTICS & REPORTING
+# ============================================
+
+@router.get("/analytics/districts")
+async def get_district_analytics(
+    from_date: Optional[str] = Query(None, description="Start date (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ)"),
+    to_date: Optional[str] = Query(None, description="End date (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ)"),
+    sort_by: str = Query("unresolved_count", description="Sort field: unresolved_count, high_severity_count, total_issues, district_name"),
+    sort_order: str = Query("DESC", description="Sort order: ASC or DESC"),
+    admin: AdminTokenData = Depends(get_current_admin)
+) -> Dict[str, Any]:
+    """
+    Get district-wise analytics for admin console
+    
+    **PURPOSE:**
+    Provides aggregated district-level analytics for:
+    - District heatmaps showing failure hotspots
+    - Failure rankings by unresolved count or severity
+    - Escalation prioritization for authority contacts
+    
+    **DATA RETURNED PER DISTRICT:**
+    - Basic info: district_id, district_name, state_name
+    - Issue counts: total_issues, verified_issues, unresolved_issues
+    - Severity breakdown: high/moderate/low severity counts
+    - Time metrics: oldest_unresolved_issue_age_days, last_issue_reported_at
+    - Meta: percentage_unresolved, authority_contact_status
+    
+    **ANALYTICS LOGIC:**
+    - "Unresolved" = issues NOT marked resolved (status NOT IN 'resolved', 'closed', 'completed')
+    - Severity counts from AI-verified issues only (issues_verified table)
+    - Districts with zero issues still appear (with counts = 0)
+    - Uses SQL aggregation with LEFT JOINs - optimized for ~750 districts
+    
+    **QUERY PARAMS:**
+    - from_date: Filter issues reported after this date (optional)
+    - to_date: Filter issues reported before this date (default: now)
+    - sort_by: Sort field (unresolved_count, high_severity_count, total_issues, district_name)
+    - sort_order: ASC or DESC (default: DESC)
+    
+    **AUTHORITY CONTACT STATUS:**
+    - 'configured': Has active email, is_active=true
+    - 'inactive': Authority exists but is_active=false
+    - 'missing': No authority OR email is NULL
+    - 'unknown': No data available
+    
+    **PERFORMANCE:**
+    - Query time: ~100-500ms for 750 districts
+    - Uses indexed aggregation with CTEs
+    - No N+1 queries - single RPC call
+    
+    **RETURNS:**
+    ```json
+    {
+        "districts": [
+            {
+                "district_id": "uuid",
+                "district_name": "Mumbai",
+                "state_name": "Maharashtra",
+                "total_issues": 150,
+                "verified_issues": 140,
+                "unresolved_issues": 75,
+                "high_severity_count": 20,
+                "moderate_severity_count": 35,
+                "low_severity_count": 20,
+                "oldest_unresolved_issue_age_days": 45,
+                "percentage_unresolved": 50.00,
+                "last_issue_reported_at": "2026-01-23T10:30:00Z",
+                "authority_contact_status": "configured"
+            },
+            ...
+        ],
+        "metadata": {
+            "total_districts": 750,
+            "districts_with_issues": 523,
+            "date_range": {
+                "from": "2025-01-01T00:00:00Z",
+                "to": "2026-01-23T23:59:59Z"
+            },
+            "sort": {
+                "by": "unresolved_count",
+                "order": "DESC"
+            }
+        },
+        "summary": {
+            "total_issues_all_districts": 12500,
+            "total_unresolved_all_districts": 6200,
+            "districts_with_configured_authority": 450,
+            "districts_with_missing_authority": 300
+        }
+    }
+    ```
+    """
+    try:
+        supabase = get_supabase()
+        
+        # Validate and parse dates
+        from_date_ts = None
+        to_date_ts = datetime.utcnow()
+        
+        if from_date:
+            try:
+                from_date_ts = datetime.fromisoformat(from_date.replace('Z', '+00:00'))
+            except ValueError:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Invalid from_date format. Use ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ"
+                )
+        
+        if to_date:
+            try:
+                to_date_ts = datetime.fromisoformat(to_date.replace('Z', '+00:00'))
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid to_date format. Use ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ"
+                )
+        
+        # Validate sort parameters
+        valid_sort_fields = ['unresolved_count', 'high_severity_count', 'total_issues', 'district_name']
+        if sort_by not in valid_sort_fields:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid sort_by. Must be one of: {', '.join(valid_sort_fields)}"
+            )
+        
+        if sort_order.upper() not in ['ASC', 'DESC']:
+            raise HTTPException(status_code=400, detail="Invalid sort_order. Must be ASC or DESC")
+        
+        # Call the district analytics function via Supabase RPC
+        # This executes the optimized SQL function defined in district_analytics_function.sql
+        result = supabase.rpc(
+            'get_district_analytics',
+            {
+                'p_from_date': from_date_ts.isoformat() if from_date_ts else None,
+                'p_to_date': to_date_ts.isoformat(),
+                'p_sort_by': sort_by,
+                'p_sort_order': sort_order.upper()
+            }
+        ).execute()
+        
+        districts = result.data if result.data else []
+        
+        # Calculate summary statistics
+        total_districts = len(districts)
+        districts_with_issues = len([d for d in districts if d['total_issues'] > 0])
+        total_issues_sum = sum(d['total_issues'] for d in districts)
+        total_unresolved_sum = sum(d['unresolved_issues'] for d in districts)
+        configured_authority_count = len([d for d in districts if d['authority_contact_status'] == 'configured'])
+        missing_authority_count = len([d for d in districts if d['authority_contact_status'] == 'missing'])
+        
+        return {
+            "districts": districts,
+            "metadata": {
+                "total_districts": total_districts,
+                "districts_with_issues": districts_with_issues,
+                "date_range": {
+                    "from": from_date_ts.isoformat() if from_date_ts else None,
+                    "to": to_date_ts.isoformat()
+                },
+                "sort": {
+                    "by": sort_by,
+                    "order": sort_order.upper()
+                }
+            },
+            "summary": {
+                "total_issues_all_districts": total_issues_sum,
+                "total_unresolved_all_districts": total_unresolved_sum,
+                "districts_with_configured_authority": configured_authority_count,
+                "districts_with_missing_authority": missing_authority_count
+            }
+        }
+    
+    except HTTPException:
+        # Re-raise validation errors
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get district analytics: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve district analytics: {str(e)}"
+        )
+
+
+# ============================================
 # USER MANAGEMENT
 # ============================================
 

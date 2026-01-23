@@ -48,6 +48,13 @@ Run these in order during initial setup:
    - Diagnostic queries for troubleshooting admin authentication
    - Check admin existence, RLS status, password hash format
 
+4. **`district_analytics_function.sql`**
+   - Creates `get_district_analytics()` function for admin dashboard
+   - Provides aggregated district-level metrics (issues, severity, resolution rates)
+   - Optimized for ~750 districts with CTEs and LEFT JOINs
+   - Supports date filtering and dynamic sorting
+   - Powers `GET /admin/analytics/districts` endpoint
+
 ### `migrations/` - Schema Migrations
 
 Apply these as needed when features are added:
