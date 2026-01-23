@@ -24,7 +24,13 @@ from app.database import get_supabase
 
 logger = logging.getLogger(__name__)
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Initialize bcrypt context with explicit settings
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto",
+    bcrypt__rounds=12,
+    bcrypt__ident="2b"
+)
 security = HTTPBearer()
 
 
