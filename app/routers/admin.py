@@ -177,7 +177,7 @@ async def get_admin_dashboard(
         ).execute()
         
         # Routing statistics
-        routed_issues = supabase.table("issues_verified").select("id", count="exact").is_not(
+        routed_issues = supabase.table("issues_verified").select("id", count="exact").not_.is_(
             "district_id", "null"
         ).execute()
         
