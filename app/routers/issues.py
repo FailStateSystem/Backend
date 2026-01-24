@@ -615,7 +615,13 @@ async def build_issue_response(issue_data: dict) -> Issue:
         timeline=timeline,
         verification_status=issue_data.get("verification_status", "pending"),
         processed_at=issue_data.get("processed_at"),
-        rejection_reason=issue_data.get("rejection_reason")
+        rejection_reason=issue_data.get("rejection_reason"),
+        # District routing fields
+        district_id=issue_data.get("district_id"),
+        district_name=issue_data.get("district_name"),
+        state_name=issue_data.get("state_name"),
+        routing_status=issue_data.get("routing_status"),
+        routing_method=issue_data.get("routing_method")
     )
 
 async def build_verified_issue_response(verified_data: dict) -> Issue:
@@ -656,7 +662,13 @@ async def build_verified_issue_response(verified_data: dict) -> Issue:
         upvotes=original_issue.get("upvotes", 0),
         timeline=timeline,
         verification_status="verified",  # Always verified for issues in verified table
-        processed_at=original_issue.get("processed_at")
+        processed_at=original_issue.get("processed_at"),
+        # District routing fields (prefer issues table, fallback to verified)
+        district_id=original_issue.get("district_id") or verified_data.get("district_id"),
+        district_name=original_issue.get("district_name") or verified_data.get("district_name"),
+        state_name=original_issue.get("state_name") or verified_data.get("state_name"),
+        routing_status=original_issue.get("routing_status") or verified_data.get("routing_status"),
+        routing_method=original_issue.get("routing_method") or verified_data.get("routing_method")
     )
 
 async def add_timeline_event(issue_id: str, event_type: TimelineEventType, description: str):
