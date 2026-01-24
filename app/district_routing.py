@@ -376,7 +376,7 @@ def route_verified_issue(
     Called after AI verification succeeds
     
     Args:
-        issue_id: ID from issues table
+        issue_id: ID from issues table (original issue)
         original_issue_id: ID from issues_verified table
         latitude: Issue latitude
         longitude: Issue longitude
@@ -388,7 +388,7 @@ def route_verified_issue(
     try:
         routing_service = get_routing_service()
         
-        # Route and notify
+        # Route and notify (updates issues_verified table)
         routing_success, queue_id = routing_service.route_and_notify(
             original_issue_id,  # Use verified issue ID
             original_issue_id,
@@ -399,6 +399,33 @@ def route_verified_issue(
         )
         
         if routing_success:
+            # CRITICAL FIX: Also update the original issues table with district info
+            try:
+                # Get district info from issues_verified
+                verified_result = routing_service.supabase.table('issues_verified')\
+                    .select('district_id, district_name, state_name, routing_status, routing_method, routed_at')\
+                    .eq('id', original_issue_id)\
+                    .limit(1)\
+                    .execute()
+                
+                if verified_result.data and len(verified_result.data) > 0:
+                    district_info = verified_result.data[0]
+                    
+                    # Update original issues table
+                    routing_service.supabase.table('issues').update({
+                        'district_id': district_info['district_id'],
+                        'district_name': district_info['district_name'],
+                        'state_name': district_info.get('state_name'),
+                        'routing_status': district_info.get('routing_status'),
+                        'routing_method': district_info.get('routing_method'),
+                        'routed_at': district_info.get('routed_at')
+                    }).eq('id', issue_id).execute()
+                    
+                    logger.info(f"✅ Updated original issue {issue_id} with district info")
+            except Exception as copy_error:
+                logger.error(f"⚠️ Failed to copy district info to issues table: {copy_error}")
+                # Don't fail the whole process if this copy fails
+            
             if queue_id:
                 logger.info(f"✅ Issue {original_issue_id} routed and queued for DM notification")
             else:
