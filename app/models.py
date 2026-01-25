@@ -20,6 +20,9 @@ class IssueCategory(str, Enum):
 
 class TimelineEventType(str, Enum):
     REPORTED = "reported"
+    VERIFIED = "verified"
+    REJECTED = "rejected"
+    ROUTED = "routed"
     EMAIL_SENT = "email_sent"
     IN_PROGRESS = "in_progress"
     RESOLVED = "resolved"

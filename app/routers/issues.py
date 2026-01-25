@@ -184,7 +184,7 @@ async def create_issue(
 
 @router.get("", response_model=List[Issue])
 async def get_issues(
-    status: Optional[IssueStatus] = None,
+    issue_status: Optional[IssueStatus] = None,
     category: Optional[IssueCategory] = None,
     limit: int = Query(default=50, le=100),
     offset: int = 0
@@ -198,8 +198,8 @@ async def get_issues(
             "*, issues!inner(*)"
         )
         
-        if status:
-            query = query.eq("issues.status", status.value)
+        if issue_status:
+            query = query.eq("issues.status", issue_status.value)
         
         if category:
             query = query.eq("issues.category", category.value)

@@ -1017,12 +1017,17 @@ async def get_issue_details(
                     issue["rejection_details"] = rejected_result.data[0]
         
         # Get timeline events
-        timeline_result = supabase.table("issue_timeline").select("*").eq(
-            "issue_id", issue["id"]
-        ).order("timestamp", desc=False).execute()
-        
-        if timeline_result.data:
-            issue["timeline"] = timeline_result.data
+        try:
+            timeline_result = supabase.table("timeline_events").select("*").eq(
+                "issue_id", issue["id"]
+            ).order("timestamp", desc=False).execute()
+            
+            if timeline_result.data:
+                issue["timeline"] = timeline_result.data
+        except Exception as timeline_error:
+            # Timeline query failed - skip it
+            logger.debug(f"Timeline query skipped: {timeline_error}")
+            issue["timeline"] = []
         
         return issue
     
