@@ -621,7 +621,11 @@ async def build_issue_response(issue_data: dict) -> Issue:
         district_name=issue_data.get("district_name"),
         state_name=issue_data.get("state_name"),
         routing_status=issue_data.get("routing_status"),
-        routing_method=issue_data.get("routing_method")
+        routing_method=issue_data.get("routing_method"),
+        routed_at=issue_data.get("routed_at"),
+        # Notification fields
+        dm_notification_sent=issue_data.get("dm_notification_sent", False),
+        dm_notification_sent_at=issue_data.get("dm_notification_sent_at")
     )
 
 async def build_verified_issue_response(verified_data: dict) -> Issue:
@@ -668,7 +672,11 @@ async def build_verified_issue_response(verified_data: dict) -> Issue:
         district_name=original_issue.get("district_name") or verified_data.get("district_name"),
         state_name=original_issue.get("state_name") or verified_data.get("state_name"),
         routing_status=original_issue.get("routing_status") or verified_data.get("routing_status"),
-        routing_method=original_issue.get("routing_method") or verified_data.get("routing_method")
+        routing_method=original_issue.get("routing_method") or verified_data.get("routing_method"),
+        routed_at=original_issue.get("routed_at") or verified_data.get("routed_at"),
+        # Notification fields
+        dm_notification_sent=original_issue.get("dm_notification_sent", False) or verified_data.get("dm_notification_sent", False),
+        dm_notification_sent_at=original_issue.get("dm_notification_sent_at") or verified_data.get("dm_notification_sent_at")
     )
 
 async def add_timeline_event(issue_id: str, event_type: TimelineEventType, description: str):

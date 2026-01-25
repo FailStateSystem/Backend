@@ -208,6 +208,10 @@ class Issue(IssueBase):
     state_name: Optional[str] = None
     routing_status: Optional[str] = "pending"
     routing_method: Optional[str] = None
+    routed_at: Optional[datetime] = None
+    # Notification fields
+    dm_notification_sent: Optional[bool] = False
+    dm_notification_sent_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
