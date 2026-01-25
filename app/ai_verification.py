@@ -23,6 +23,7 @@ if settings.OPENAI_API_KEY:
 class AIVerificationResponse(BaseModel):
     """Structured response from AI verification"""
     is_genuine: bool
+    is_civic_issue: bool  # CRITICAL: True only if public space + govt responsibility
     confidence_score: float = Field(ge=0.0, le=1.0)
     reasoning: str
     severity: str  # low | moderate | high
@@ -41,6 +42,7 @@ SYSTEM_PROMPT = """You are a civic issue verification and analysis engine.
 
 Your job is to:
 - Determine if a reported civic issue is genuine or fake.
+- **CRITICAL: Determine if the issue is ACTUALLY a civic/public infrastructure issue under government responsibility.**
 - Check if the image contains NSFW content (nudity, explicit content, violence, gore).
 - Check if the image is a screenshot, meme, or social media post (rather than a real photo).
 - Analyze the image and description together.
@@ -49,7 +51,7 @@ Your job is to:
 - Output strictly valid JSON.
 
 You must be conservative.
-If uncertain, mark the issue as NOT genuine.
+If uncertain, mark the issue as NOT genuine OR NOT civic.
 
 Never make accusations.
 Never assign blame.
@@ -57,6 +59,26 @@ Never speculate intent.
 Only describe observable reality.
 
 Use neutral, factual language.
+
+CRITICAL CIVIC ISSUE GATE (TRUST-CRITICAL):
+An issue is ONLY civic if ALL three conditions are met:
+1. Occurs in PUBLIC SPACE (not private property)
+2. Maintained by GOVERNMENT / MUNICIPAL authority
+3. Impacts GENERAL PUBLIC (not private business/residence)
+
+Mark is_civic_issue=false if ANY of these apply:
+- Private business (shop, restaurant, mall, office)
+- Private property (apartment, house, personal residence)
+- Shop signage (even if broken/unlit)
+- Private bathroom (even if claimed as "public toilet")
+- Private vehicle
+- Indoor spaces (default to false unless unmistakably public/govt building)
+- Anything owned by an individual or company
+
+Even if image is real and problem exists, if it's private property → is_civic_issue=false
+
+When ambiguous → REJECT (is_civic_issue=false, is_genuine=false)
+Conservative bias is mandatory. False negatives are acceptable. False positives damage trust.
 
 IMPORTANT CONTENT CHECKS:
 - Mark is_nsfw=true if the image contains any nudity, sexual content, extreme violence, or gore.
@@ -78,11 +100,18 @@ TASKS:
    - Check if image contains NSFW content (nudity, sexual content, extreme violence, gore)
    - Check if image is a screenshot, meme, or social media post
    
-2. Verify if this is a real-world, genuine civic/infrastructure issue.
-3. Detect if the image appears AI-generated, edited, or fake.
+2. **CIVIC ISSUE GATE** (Trust-critical - apply strict rules):
+   - Check if issue occurs in PUBLIC SPACE (not private property)
+   - Check if maintained by GOVERNMENT (not private business/individual)
+   - Check if impacts GENERAL PUBLIC (not private residence/shop)
+   - Indoor scenes → default is_civic_issue=false unless unmistakably govt building
+   - Shop signage, private bathrooms, private vehicles → is_civic_issue=false
+   - When in doubt → is_civic_issue=false
+   
+3. Verify if this is a real-world, genuine image (not AI-generated, edited, or fake).
 4. Check if the image and description are semantically consistent.
-5. Assess severity: low, moderate, or high.
-6. Generate:
+5. Assess severity: low, moderate, or high (only if civic issue).
+6. Generate (only if is_genuine=true AND is_civic_issue=true):
    - A public-facing dramatic but factual title
    - A refined public description
    - A public impact explanation
@@ -99,10 +128,11 @@ RULES:
 OUTPUT FORMAT (JSON ONLY):
 {{
   "is_genuine": true/false,
+  "is_civic_issue": true/false,
   "is_nsfw": true/false,
   "is_screenshot": true/false,
   "confidence_score": 0-1,
-  "reasoning": "Short explanation",
+  "reasoning": "Explain why genuine/fake AND why civic/not-civic. Be specific about ownership (public vs private).",
   "severity": "low | moderate | high",
   "generated_title": "",
   "generated_description": "",
@@ -111,7 +141,11 @@ OUTPUT FORMAT (JSON ONLY):
   "content_warnings": []
 }}
 
-NOTE: If is_nsfw=true OR is_screenshot=true, you should also set is_genuine=false and explain why in reasoning."""
+CRITICAL NOTES:
+- If is_nsfw=true OR is_screenshot=true → set is_genuine=false
+- If is_civic_issue=false (private property) → set is_genuine=false
+- Only set is_genuine=true if BOTH: real image AND civic issue
+- Reasoning MUST explain civic determination (public vs private space)"""
 
 
 async def download_image_as_base64(image_url: str) -> Optional[str]:
@@ -269,6 +303,7 @@ async def verify_issue_without_ai(description: str) -> AIVerificationResponse:
     
     return AIVerificationResponse(
         is_genuine=True,  # Assume genuine when AI unavailable
+        is_civic_issue=True,  # Assume civic when AI unavailable (requires manual review)
         confidence_score=0.5,
         reasoning="AI verification unavailable - manual review required",
         severity="moderate",

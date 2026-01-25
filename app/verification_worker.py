@@ -84,6 +84,7 @@ class VerificationWorker:
             verified_data = {
                 "original_issue_id": original_issue["id"],
                 "is_genuine": verification.is_genuine,
+                "is_civic_issue": verification.is_civic_issue,  # Always true for verified (civic gate)
                 "ai_confidence_score": verification.confidence_score,
                 "ai_reasoning": verification.reasoning,
                 "severity": verification.severity,
@@ -123,19 +124,23 @@ class VerificationWorker:
     async def create_rejected_issue(self, original_issue: dict, verification: AIVerificationResponse):
         """Create entry in issues_rejected table"""
         try:
-            # Determine rejection reason based on AI response
+            # Determine rejection reason based on AI response (STRICT ORDER)
             rejection_reason = "ai_verification_failed"
             
             if verification.is_nsfw:
                 rejection_reason = "nsfw_content_detected"
             elif verification.is_screenshot:
                 rejection_reason = "screenshot_or_meme_detected"
+            elif not verification.is_civic_issue:
+                # TRUST-CRITICAL: Not a civic/public infrastructure issue
+                rejection_reason = "not_civic_issue"
             elif not verification.is_genuine:
                 rejection_reason = "not_genuine_civic_issue"
             
             rejected_data = {
                 "original_issue_id": original_issue["id"],
                 "rejection_reason": rejection_reason,
+                "is_civic_issue": verification.is_civic_issue,  # False if private property
                 "ai_reasoning": verification.reasoning,
                 "confidence_score": verification.confidence_score,
                 "rejected_by": "ai_verification"
@@ -163,12 +168,14 @@ class VerificationWorker:
             user_id = original_issue["reported_by"]
             issue_id = original_issue["id"]
             
-            # Determine rejection reason
+            # Determine rejection reason (STRICT ORDER)
             rejection_reason = "not_genuine_civic_issue"
             if verification.is_nsfw:
                 rejection_reason = "nsfw_content_detected"
             elif verification.is_screenshot:
                 rejection_reason = "screenshot_or_meme_detected"
+            elif not verification.is_civic_issue:
+                rejection_reason = "not_civic_issue"
             
             # Call database function to apply penalty
             # Note: Supabase RPC with JSON return can throw APIError even on success
@@ -486,10 +493,11 @@ class VerificationWorker:
             
             processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
             
-            # Check for content violations first
+            # Check for content violations and civic gate (STRICT ORDER)
             should_reject = False
             rejection_type = None
             
+            # GATE 1: Content Safety
             if verification.is_nsfw:
                 should_reject = True
                 rejection_type = "NSFW content"
@@ -498,10 +506,18 @@ class VerificationWorker:
                 should_reject = True
                 rejection_type = "Screenshot/Meme"
                 logger.warning(f"🚫 Issue {issue_id} is a screenshot or meme")
+            
+            # GATE 2: Civic Issue Classification (TRUST-CRITICAL)
+            elif not verification.is_civic_issue:
+                should_reject = True
+                rejection_type = "Not a civic issue"
+                logger.warning(f"🚫 Issue {issue_id} is NOT a civic issue (private property/business)")
+            
+            # GATE 3: Genuine/Fake Detection
             elif not verification.is_genuine:
                 should_reject = True
                 rejection_type = "Not genuine"
-                logger.info(f"❌ Issue {issue_id} is not a genuine civic issue")
+                logger.info(f"❌ Issue {issue_id} is not genuine (fake/AI-generated)")
             
             # Log successful verification
             await self.log_audit(
