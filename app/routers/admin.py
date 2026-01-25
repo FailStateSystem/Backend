@@ -916,7 +916,8 @@ async def list_verified_issues(
         query = supabase.table("issues_verified").select(
             "id, original_issue_id, generated_title, generated_description, "
             "severity, ai_confidence_score, district_id, district_name, state_name, "
-            "routing_status, dm_notification_sent, verified_at, reported_by",
+            "routing_status, dm_notification_sent, verified_at, reported_by, "
+            "image_url, video_url, location_name, location_lat, location_lng, category",
             count="exact"
         )
         
@@ -939,6 +940,96 @@ async def list_verified_issues(
     
     except Exception as e:
         logger.error(f"Failed to list verified issues: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/issues/{issue_id}")
+async def get_issue_details(
+    issue_id: str,
+    admin: AdminTokenData = Depends(get_current_admin)
+):
+    """
+    Get detailed information about a specific issue
+    
+    Accepts either:
+    - Original issue ID (from issues table)
+    - Verified issue ID (from issues_verified table)
+    
+    Returns comprehensive data including:
+    - Original issue data
+    - Verification/rejection details
+    - Reporter info
+    - District routing info
+    - Timeline/history
+    """
+    try:
+        supabase = get_supabase()
+        
+        # Try to get from issues table first
+        issue_result = supabase.table("issues").select("*").eq("id", issue_id).limit(1).execute()
+        
+        # If not found, check if this is a verified issue ID
+        if not issue_result.data:
+            verified_result = supabase.table("issues_verified").select("*, original_issue_id").eq(
+                "id", issue_id
+            ).limit(1).execute()
+            
+            if verified_result.data:
+                # Get the original issue using original_issue_id
+                original_id = verified_result.data[0]["original_issue_id"]
+                issue_result = supabase.table("issues").select("*").eq("id", original_id).limit(1).execute()
+                
+                if issue_result.data:
+                    issue = issue_result.data[0]
+                    # Already have verification details from the verified_result
+                    issue["verification_details"] = verified_result.data[0]
+                else:
+                    raise HTTPException(status_code=404, detail="Original issue not found")
+            else:
+                raise HTTPException(status_code=404, detail="Issue not found")
+        else:
+            issue = issue_result.data[0]
+        
+        # Get reporter info
+        user_result = supabase.table("users").select(
+            "id, email, username, trust_score, account_status"
+        ).eq("id", issue["reported_by"]).limit(1).execute()
+        
+        if user_result.data:
+            issue["reporter"] = user_result.data[0]
+        
+        # Get verification/rejection details if not already fetched
+        if "verification_details" not in issue:
+            if issue["verification_status"] == "verified":
+                verified_result = supabase.table("issues_verified").select("*").eq(
+                    "original_issue_id", issue["id"]
+                ).limit(1).execute()
+                
+                if verified_result.data:
+                    issue["verification_details"] = verified_result.data[0]
+            
+            elif issue["verification_status"] == "rejected":
+                rejected_result = supabase.table("issues_rejected").select("*").eq(
+                    "original_issue_id", issue["id"]
+                ).limit(1).execute()
+                
+                if rejected_result.data:
+                    issue["rejection_details"] = rejected_result.data[0]
+        
+        # Get timeline events
+        timeline_result = supabase.table("issue_timeline").select("*").eq(
+            "issue_id", issue["id"]
+        ).order("timestamp", desc=False).execute()
+        
+        if timeline_result.data:
+            issue["timeline"] = timeline_result.data
+        
+        return issue
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get issue details: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1143,6 +1234,118 @@ async def approve_rejected_issue(
         raise
     except Exception as e:
         logger.error(f"Failed to approve rejected issue: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/issues/{issue_id}/reject")
+async def manually_reject_issue(
+    issue_id: str,
+    request: Request,
+    rejection_reason: str = Query(..., description="Rejection reason: not_civic_issue, inappropriate_content, duplicate, spam, other"),
+    reasoning: str = Query(..., description="Detailed explanation for rejection"),
+    apply_penalty: bool = Query(False, description="Apply penalty to user"),
+    admin: AdminTokenData = Depends(get_current_admin)
+):
+    """
+    Manually reject an issue (admin override)
+    
+    Use this when:
+    - AI verified an issue that shouldn't be on the platform
+    - Issue is not a civic issue (private property)
+    - Issue is duplicate, spam, or inappropriate
+    
+    Valid rejection_reason values:
+    - not_civic_issue (private property/business)
+    - inappropriate_content
+    - duplicate
+    - spam
+    - other
+    """
+    try:
+        supabase = get_supabase()
+        
+        # Get original issue
+        issue_result = supabase.table("issues").select("*").eq("id", issue_id).limit(1).execute()
+        
+        if not issue_result.data:
+            raise HTTPException(status_code=404, detail="Issue not found")
+        
+        issue = issue_result.data[0]
+        
+        # Check current status
+        if issue["verification_status"] == "rejected":
+            raise HTTPException(status_code=400, detail="Issue is already rejected")
+        
+        # Create rejected entry
+        rejected_data = {
+            "original_issue_id": issue_id,
+            "rejection_reason": rejection_reason,
+            "is_civic_issue": False if rejection_reason == "not_civic_issue" else None,
+            "ai_reasoning": f"MANUAL ADMIN REJECTION: {reasoning}",
+            "confidence_score": 1.0,  # Admin decision = 100% confidence
+            "rejected_by": f"admin:{admin.email}"
+        }
+        
+        supabase.table("issues_rejected").insert(rejected_data).execute()
+        
+        # Update issue status
+        supabase.table("issues").update({
+            "verification_status": "rejected",
+            "rejection_reason": rejection_reason,
+            "processed_at": datetime.utcnow().isoformat()
+        }).eq("id", issue_id).execute()
+        
+        # Delete from issues_verified if exists
+        supabase.table("issues_verified").delete().eq("original_issue_id", issue_id).execute()
+        
+        # Apply penalty if requested
+        penalty_info = None
+        if apply_penalty:
+            try:
+                result = supabase.rpc("apply_fake_submission_penalty", {
+                    "p_user_id": issue["reported_by"],
+                    "p_issue_id": issue_id,
+                    "p_rejection_reason": rejection_reason,
+                    "p_ai_reasoning": f"Admin rejection: {reasoning}",
+                    "p_confidence_score": 1.0
+                }).execute()
+                
+                if result.data:
+                    penalty_info = result.data[0] if isinstance(result.data, list) else result.data
+                    logger.warning(f"⚠️ Applied penalty to user {issue['reported_by']} for rejected issue {issue_id}")
+            except Exception as penalty_error:
+                logger.error(f"Failed to apply penalty: {penalty_error}")
+        
+        # Log admin action
+        await log_admin_action(
+            admin_id=str(admin.admin_id),
+            action_type="reject_issue",
+            target_type="issue",
+            target_id=issue_id,
+            details={
+                "rejection_reason": rejection_reason,
+                "reasoning": reasoning,
+                "penalty_applied": apply_penalty,
+                "penalty_info": penalty_info,
+                "previous_status": issue["verification_status"]
+            },
+            request=request
+        )
+        
+        logger.warning(f"🚫 Admin {admin.email} manually rejected issue {issue_id}: {rejection_reason}")
+        
+        return {
+            "message": "Issue rejected successfully",
+            "issue_id": issue_id,
+            "rejection_reason": rejection_reason,
+            "penalty_applied": apply_penalty,
+            "penalty_info": penalty_info
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to reject issue: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
