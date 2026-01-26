@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Request
+from fastapi.responses import RedirectResponse
 from datetime import timedelta, datetime
 from app.models import UserCreate, UserLogin, Token, User
 from app.auth import get_password_hash, verify_password, create_access_token
@@ -7,6 +8,7 @@ from app.config import settings
 from app.email_service import send_verification_email, send_welcome_email
 import secrets
 import logging
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -268,5 +270,186 @@ async def resend_verification(email: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred: {str(e)}"
+        )
+
+
+# ================================================
+# GOOGLE OAUTH ENDPOINTS
+# ================================================
+
+@router.get("/google/login")
+async def google_login(request: Request):
+    """
+    Initiate Google OAuth flow
+    
+    Redirects user to Google's OAuth consent screen
+    """
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Google OAuth is not configured"
+        )
+    
+    # Build Google OAuth URL
+    google_auth_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={settings.GOOGLE_CLIENT_ID}"
+        f"&redirect_uri={settings.GOOGLE_REDIRECT_URI}"
+        "&response_type=code"
+        "&scope=openid email profile"
+        "&access_type=offline"
+        "&prompt=consent"
+    )
+    
+    return RedirectResponse(url=google_auth_url)
+
+
+@router.get("/google/callback")
+async def google_callback(code: str, request: Request):
+    """
+    Handle Google OAuth callback
+    
+    Exchanges authorization code for user info and creates/logs in user
+    """
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Google OAuth is not configured"
+        )
+    
+    try:
+        # Exchange code for access token
+        async with httpx.AsyncClient() as client:
+            token_response = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": settings.GOOGLE_CLIENT_ID,
+                    "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+                    "grant_type": "authorization_code"
+                }
+            )
+            
+            if token_response.status_code != 200:
+                logger.error(f"Google token exchange failed: {token_response.text}")
+                return RedirectResponse(
+                    url=f"{settings.FRONTEND_URL}/login?error=auth_failed",
+                    status_code=302
+                )
+            
+            token_data = token_response.json()
+            access_token = token_data.get("access_token")
+            
+            # Get user info from Google
+            user_info_response = await client.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            
+            if user_info_response.status_code != 200:
+                logger.error(f"Google userinfo failed: {user_info_response.text}")
+                return RedirectResponse(
+                    url=f"{settings.FRONTEND_URL}/login?error=auth_failed",
+                    status_code=302
+                )
+            
+            user_info = user_info_response.json()
+        
+        # Extract user data
+        email = user_info.get("email")
+        google_id = user_info.get("id")
+        name = user_info.get("name", "")
+        
+        if not email or not google_id:
+            logger.error(f"Missing email or google_id in user_info: {user_info}")
+            return RedirectResponse(
+                url=f"{settings.FRONTEND_URL}/login?error=invalid_data",
+                status_code=302
+            )
+        
+        supabase = get_supabase()
+        
+        # Check if user exists by email or google_id
+        result = supabase.table("users").select("*").or_(
+            f"email.eq.{email},google_id.eq.{google_id}"
+        ).execute()
+        
+        if result.data:
+            # User exists - check if they're using different auth method
+            user = result.data[0]
+            
+            # If email matches but google_id is different, link accounts
+            if user.get("email") == email and not user.get("google_id"):
+                # Link Google account to existing email/password account
+                supabase.table("users").update({
+                    "google_id": google_id,
+                    "email_verified": True  # Google emails are pre-verified
+                }).eq("id", user["id"]).execute()
+                
+                logger.info(f"Linked Google account to existing user: {email}")
+            
+            # Check if account is suspended
+            if user.get("account_status") == "suspended":
+                return RedirectResponse(
+                    url=f"{settings.FRONTEND_URL}/login?error=account_suspended",
+                    status_code=302
+                )
+        else:
+            # Create new user
+            username = email.split('@')[0] + f"_{secrets.token_hex(3)}"
+            
+            new_user = {
+                "email": email,
+                "username": username,
+                "password_hash": None,  # No password for OAuth users
+                "google_id": google_id,
+                "email_verified": True,  # Google emails are pre-verified
+                "auth_provider": "google",
+                "credibility_score": 0,
+                "issues_posted": 0,
+                "issues_resolved": 0
+            }
+            
+            result = supabase.table("users").insert(new_user).execute()
+            
+            if not result.data:
+                logger.error("Failed to create Google OAuth user")
+                return RedirectResponse(
+                    url=f"{settings.FRONTEND_URL}/login?error=creation_failed",
+                    status_code=302
+                )
+            
+            user = result.data[0]
+            
+            # Create user rewards entry
+            user_rewards = {
+                "user_id": user["id"],
+                "total_points": 0,
+                "current_tier": "Observer I",
+                "milestones_reached": 0,
+                "items_claimed": 0
+            }
+            supabase.table("user_rewards").insert(user_rewards).execute()
+            
+            logger.info(f"Created new Google OAuth user: {email}")
+        
+        # Create JWT access token
+        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        jwt_token = create_access_token(
+            data={"sub": user["id"], "email": user["email"]},
+            expires_delta=access_token_expires
+        )
+        
+        # Redirect to frontend with token
+        redirect_url = f"{settings.FRONTEND_URL}/auth/callback?token={jwt_token}&provider=google"
+        return RedirectResponse(url=redirect_url, status_code=302)
+        
+    except Exception as e:
+        logger.error(f"Google OAuth error: {str(e)}")
+        logger.exception(e)
+        return RedirectResponse(
+            url=f"{settings.FRONTEND_URL}/login?error=server_error",
+            status_code=302
         )
 
