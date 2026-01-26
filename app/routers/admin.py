@@ -1323,10 +1323,10 @@ async def manually_reject_issue(
         
         # Log admin action
         await log_admin_action(
-            admin_id=str(admin.admin_id),
+            admin=admin,
             action_type="reject_issue",
-            target_type="issue",
-            target_id=issue_id,
+            resource_type="issue",
+            resource_id=issue_id,
             details={
                 "rejection_reason": rejection_reason,
                 "reasoning": reasoning,
@@ -1455,10 +1455,10 @@ async def delete_issue(
         
         # Log admin action
         await log_admin_action(
-            admin_id=str(admin.admin_id),
+            admin=admin,
             action_type="delete_issue",
-            target_type="issue",
-            target_id=original_issue_id,
+            resource_type="issue",
+            resource_id=original_issue_id,
             details={
                 "title": title,
                 "reason": reason,
