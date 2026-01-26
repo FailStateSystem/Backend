@@ -15,6 +15,7 @@ pillow==10.2.0
 resend==0.8.0
 openai==1.12.0
 httpx==0.26.0
+authlib==1.3.0
 
 # Pre-ingestion filtering dependencies
 # nudenet==2.0.9                    # NSFW detection (DISABLED - AI fallback handles this, causes startup delays)

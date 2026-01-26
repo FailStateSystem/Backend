@@ -432,6 +432,14 @@ async def google_callback(code: str, request: Request):
             }
             supabase.table("user_rewards").insert(user_rewards).execute()
             
+            # Send welcome email to new Google OAuth user
+            try:
+                login_link = f"{settings.FRONTEND_URL}/login"
+                send_welcome_email(user["email"], user["username"], login_link)
+                logger.info(f"Sent welcome email to Google OAuth user: {email}")
+            except Exception as e:
+                logger.error(f"Failed to send welcome email to Google OAuth user: {str(e)}")
+            
             logger.info(f"Created new Google OAuth user: {email}")
         
         # Create JWT access token
