@@ -349,17 +349,16 @@ class VerificationWorker:
             except Exception as e:
                 logger.error(f"Failed to send verification success email: {e}")
             
-            # Create timeline event
+            # Create timeline event for verification
             try:
                 timeline_event = {
-                    "issue_id": verified_issue["id"],
+                    "issue_id": original_issue["id"],  # Use ORIGINAL issue ID, not verified
                     "type": "verified",
                     "description": f"Issue verified and published (Confidence: {verified_issue['ai_confidence_score']})",
                     "timestamp": datetime.utcnow().isoformat()
                 }
-                # Note: This would need to reference verified issue's ID in timeline
-                # For now, we'll skip this or create a separate timeline for verified issues
-                logger.info("Timeline event creation skipped - needs verified issue timeline table")
+                self.supabase.table("timeline_events").insert(timeline_event).execute()
+                logger.info(f"✅ Created timeline event: verified for issue {original_issue['id']}")
             except Exception as e:
                 logger.error(f"Failed to create timeline event: {e}")
             
@@ -386,6 +385,30 @@ class VerificationWorker:
                     
                     if routing_success:
                         logger.info(f"✅ Successfully routed issue {verified_issue['id']} to district")
+                        
+                        # Create timeline event for routing
+                        try:
+                            # Get district info from verified issue
+                            district_result = self.supabase.table("issues_verified").select(
+                                "district_name, state_name"
+                            ).eq("id", verified_issue["id"]).limit(1).execute()
+                            
+                            district_info = ""
+                            if district_result.data:
+                                district_name = district_result.data[0].get("district_name")
+                                state_name = district_result.data[0].get("state_name")
+                                district_info = f" to {district_name}, {state_name}" if district_name else ""
+                            
+                            timeline_event = {
+                                "issue_id": original_issue["id"],
+                                "type": "routed",
+                                "description": f"Issue mapped{district_info}",
+                                "timestamp": datetime.utcnow().isoformat()
+                            }
+                            self.supabase.table("timeline_events").insert(timeline_event).execute()
+                            logger.info(f"✅ Created timeline event: routed for issue {original_issue['id']}")
+                        except Exception as e:
+                            logger.error(f"Failed to create routing timeline event: {e}")
                     else:
                         logger.warning(f"⚠️ Failed to route issue {verified_issue['id']} to district")
                 else:
@@ -535,6 +558,19 @@ class VerificationWorker:
                 
                 if rejected_issue:
                     await self.mark_issue_processed(issue_id, "rejected")
+                    
+                    # Create timeline event for rejection
+                    try:
+                        timeline_event = {
+                            "issue_id": issue_id,
+                            "type": "rejected",
+                            "description": f"Issue rejected: {rejection_type}",
+                            "timestamp": datetime.utcnow().isoformat()
+                        }
+                        self.supabase.table("timeline_events").insert(timeline_event).execute()
+                        logger.info(f"✅ Created timeline event: rejected for issue {issue_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to create rejection timeline event: {e}")
                     
                     # Apply penalty for fake submission
                     await self.apply_fake_submission_penalty(issue, verification)

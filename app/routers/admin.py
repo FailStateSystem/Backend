@@ -1357,37 +1357,135 @@ async def manually_reject_issue(
 @router.delete("/issues/{issue_id}")
 async def delete_issue(
     issue_id: str,
+    request: Request,
     reason: str = Query(..., description="Reason for deletion"),
     admin: AdminTokenData = Depends(get_current_admin)
 ):
     """
-    Delete an issue permanently
+    Delete an issue permanently (HARD DELETE)
+    
+    Accepts either:
+    - Original issue ID (from issues table)
+    - Verified issue ID (from issues_verified table)
     
     ⚠️ WARNING: This is irreversible!
-    - Deletes from issues table
-    - CASCADE deletes from issues_verified/issues_rejected
+    
+    Deletes from ALL tables:
+    - issues (main table)
+    - issues_verified
+    - issues_rejected
+    - timeline_events
+    - issue_upvotes
+    - dm_notification_queue
+    - All related records (CASCADE)
     """
     try:
         supabase = get_supabase()
         
-        # Get issue info before deletion
-        issue_result = supabase.table("issues").select("title, reported_by").eq("id", issue_id).limit(1).execute()
+        # Try to find the issue in issues table first
+        issue_result = supabase.table("issues").select("id, title, reported_by, verification_status").eq(
+            "id", issue_id
+        ).limit(1).execute()
         
+        # If not found, check if this is a verified issue ID
         if not issue_result.data:
-            raise HTTPException(status_code=404, detail="Issue not found")
+            verified_result = supabase.table("issues_verified").select(
+                "original_issue_id, generated_title"
+            ).eq("id", issue_id).limit(1).execute()
+            
+            if verified_result.data:
+                # Get the original issue ID
+                original_id = verified_result.data[0]["original_issue_id"]
+                issue_result = supabase.table("issues").select(
+                    "id, title, reported_by, verification_status"
+                ).eq("id", original_id).limit(1).execute()
+                
+                if issue_result.data:
+                    issue_info = issue_result.data[0]
+                    issue_info["was_verified_id"] = True
+                else:
+                    raise HTTPException(status_code=404, detail="Original issue not found")
+            else:
+                raise HTTPException(status_code=404, detail="Issue not found in any table")
+        else:
+            issue_info = issue_result.data[0]
+            issue_info["was_verified_id"] = False
         
-        issue_info = issue_result.data[0]
+        original_issue_id = issue_info["id"]
+        title = issue_info["title"]
         
-        # Delete from main table (CASCADE handles related tables)
-        result = supabase.table("issues").delete().eq("id", issue_id).execute()
+        # HARD DELETE: Delete from all tables manually (in case CASCADE doesn't work)
+        # 1. Delete from issues_verified
+        try:
+            supabase.table("issues_verified").delete().eq("original_issue_id", original_issue_id).execute()
+            logger.info(f"Deleted from issues_verified for issue {original_issue_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete from issues_verified: {e}")
         
-        logger.critical(f"🗑️ Admin {admin.admin_id} DELETED issue {issue_id} ({issue_info['title']}): {reason}")
+        # 2. Delete from issues_rejected
+        try:
+            supabase.table("issues_rejected").delete().eq("original_issue_id", original_issue_id).execute()
+            logger.info(f"Deleted from issues_rejected for issue {original_issue_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete from issues_rejected: {e}")
+        
+        # 3. Delete from timeline_events
+        try:
+            supabase.table("timeline_events").delete().eq("issue_id", original_issue_id).execute()
+            logger.info(f"Deleted from timeline_events for issue {original_issue_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete from timeline_events: {e}")
+        
+        # 4. Delete from dm_notification_queue
+        try:
+            supabase.table("dm_notification_queue").delete().eq("original_issue_id", original_issue_id).execute()
+            logger.info(f"Deleted from dm_notification_queue for issue {original_issue_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete from dm_notification_queue: {e}")
+        
+        # 5. Delete from issue_upvotes
+        try:
+            supabase.table("issue_upvotes").delete().eq("issue_id", original_issue_id).execute()
+            logger.info(f"Deleted from issue_upvotes for issue {original_issue_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete from issue_upvotes: {e}")
+        
+        # 6. Finally, delete from main issues table
+        result = supabase.table("issues").delete().eq("id", original_issue_id).execute()
+        
+        # Log admin action
+        await log_admin_action(
+            admin_id=str(admin.admin_id),
+            action_type="delete_issue",
+            target_type="issue",
+            target_id=original_issue_id,
+            details={
+                "title": title,
+                "reason": reason,
+                "reported_by": issue_info.get("reported_by"),
+                "verification_status": issue_info.get("verification_status"),
+                "was_verified_id_provided": issue_info.get("was_verified_id", False),
+                "provided_id": issue_id
+            },
+            request=request
+        )
+        
+        logger.critical(f"🗑️ Admin {admin.email} HARD DELETED issue {original_issue_id} ({title}): {reason}")
         
         return {
-            "message": "Issue permanently deleted",
-            "issue_id": issue_id,
-            "title": issue_info['title'],
+            "message": "Issue permanently deleted from all tables",
+            "original_issue_id": original_issue_id,
+            "provided_id": issue_id,
+            "title": title,
             "reason": reason,
+            "deleted_from_tables": [
+                "issues",
+                "issues_verified",
+                "issues_rejected",
+                "timeline_events",
+                "dm_notification_queue",
+                "issue_upvotes"
+            ],
             "warning": "This action is irreversible"
         }
     
